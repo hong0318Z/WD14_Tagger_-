@@ -1,12 +1,19 @@
 import json
+import os
+import shutil
 import time
 
 import gradio as gr
 
 import deepseek_client
+import local_config
+import presets as preset_store
 from exif_reader import read_image_metadata
 from tag_db import TagDB
 from wd14_tagger import predict
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+SAVED_TAG_DB_PATH = os.path.join(DATA_DIR, "tag_db.csv")
 
 EXAMPLE_PRESET = {
     "id": "<timestamp_ms>",
@@ -32,7 +39,33 @@ def load_tag_db(file_obj):
     count = db.load(file_obj)
     if count == 0:
         return db, "태그 DB가 로드되지 않았습니다. (선택 사항)"
+
+    # persist a copy so it survives restarts
+    if hasattr(file_obj, "name"):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        shutil.copyfile(file_obj.name, SAVED_TAG_DB_PATH)
+
     return db, f"태그 DB 로드 완료: {count}개 태그"
+
+
+def load_saved_state():
+    """Called on app startup: restore the DeepSeek API key and tag DB from disk."""
+    cfg = local_config.load_config()
+    api_key = cfg.get("deepseek_api_key", "")
+
+    db = TagDB()
+    status = "태그 DB가 로드되지 않았습니다. (선택 사항)"
+    if os.path.exists(SAVED_TAG_DB_PATH):
+        count = db.load(SAVED_TAG_DB_PATH)
+        if count:
+            status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
+
+    return api_key, db, status
+
+
+def save_api_key(key):
+    local_config.save_config(deepseek_api_key=key or "")
+    return key
 
 
 # ---------------------------------------------------------------------------
@@ -71,19 +104,48 @@ CONCEPT_SYSTEM_PROMPT = """You are an assistant that breaks down an image genera
 into a list of concrete visual concepts that should be represented as danbooru-style tags.
 Read the user's request (it may be written in Korean) and output ONLY a JSON object of the form:
 {"concepts": ["concept1", "concept2", ...]}
-Each concept should be a short English phrase describing one visual element \
-(pose, clothing, expression, action, setting, etc). Do not include any explanation, only the JSON."""
 
-FINAL_SYSTEM_PROMPT = """You are an assistant that builds a final danbooru tag prompt for an image generation model.
+Cover ALL of the following aspects whenever relevant to the request, each as its own concept:
+- composition / camera angle / shot framing (e.g. "full body shot", "from above", "close-up", "dutch angle")
+- background / setting
+- number and type of characters present (e.g. "1girl", "1boy", "faceless male")
+- character physical features (body type, hair, skin, distinguishing features)
+- clothing / state of undress
+- pose / action / position
+- interaction between characters if any
+- facial expression and emotional state
+- lighting / atmosphere / effects (sweat, blush, tears, etc.)
+
+Produce at least 10-15 concepts in total so the final prompt can be rich and well composed. \
+Each concept should be a short English phrase describing ONE visual element. \
+Do not include any explanation, only the JSON."""
+
+FINAL_SYSTEM_PROMPT = """You are an assistant that builds a final danbooru tag prompt for an image generation model (NovelAI style).
 You will receive the user's original request (possibly in Korean) and a list of candidate tags \
 retrieved from a tag database, each with a Korean description.
-Pick and order the most relevant tags to satisfy the user's request, and combine them into a single \
-comma-separated list of English danbooru tags (use underscores or spaces as found in the candidates, \
-keep them as valid danbooru tag names).
+
+Build a long, well-composed comma-separated list of English danbooru tags, grouped conceptually in this order:
+1. quality tags (e.g. masterpiece, best quality, highres)
+2. composition / camera angle / shot framing tags
+3. background / setting tags
+4. character count and type tags (e.g. 1girl, 1boy, faceless male)
+5. character physical feature tags
+6. clothing tags
+7. pose / action / position tags
+8. expression / emotional state / effect tags (sweat, blush, tears, etc.)
+
+Rules:
+- Prefer tags from the candidate list when they fit, since those are confirmed to exist in the tag database.
+- If the candidate list is missing tags needed for composition, camera angle, quality, or background, \
+you MAY add common, well-known danbooru/NovelAI tags for those even if they are not in the candidate list.
+- The result should be a single, detailed, well-composed prompt (aim for 20-35 tags total), not a short list.
+- Use underscores or spaces as found in the candidates for tags taken from the database; \
+for added tags, use standard danbooru tag formatting (lowercase, underscores between words).
+
 Respond ONLY with a JSON object of the form:
 {"tags": "tag1, tag2, tag3, ...", "explanation": "<설명을 한국어로 작성>"}
-The "tags" field must be in English. The "explanation" field must be written in Korean, \
-briefly explaining why these tags were chosen."""
+The "tags" field must be in English and follow the grouping order above (comma separated, no curly braces). \
+The "explanation" field must be written in Korean, briefly explaining the composition and why these tags were chosen."""
 
 
 def generate_tag_combo(api_key, user_request, db: TagDB):
@@ -294,17 +356,16 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
     db_state = gr.State(TagDB())
 
     with gr.Accordion("설정", open=True):
-        deepseek_key = gr.BrowserState("", storage_key="deepseek_api_key")
-        api_key_box = gr.Textbox(
-            label="DeepSeek API Key (브라우저에 저장됨)",
+        deepseek_key = gr.Textbox(
+            label="DeepSeek API Key (서버에 저장됨, data/local_config.json)",
             type="password",
             placeholder="sk-...",
         )
-        tag_db_file = gr.File(label="단부루 태그 CSV 업로드 (선택)", file_types=[".csv"])
+        tag_db_file = gr.File(label="단부루 태그 CSV 업로드 (선택, 서버에 저장되어 재시작 후에도 유지됨)", file_types=[".csv"])
         tag_db_status = gr.Markdown("태그 DB가 로드되지 않았습니다. (선택 사항)")
 
-        demo.load(lambda k: k, inputs=deepseek_key, outputs=api_key_box)
-        api_key_box.change(lambda k: k, inputs=api_key_box, outputs=deepseek_key)
+        demo.load(load_saved_state, inputs=None, outputs=[deepseek_key, db_state, tag_db_status])
+        deepseek_key.change(save_api_key, inputs=deepseek_key, outputs=None)
         tag_db_file.change(load_tag_db, inputs=tag_db_file, outputs=[db_state, tag_db_status])
 
     with gr.Tab("1. 이미지 태그 분석"):
@@ -339,6 +400,50 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
             generate_tag_combo,
             inputs=[deepseek_key, combo_request, db_state],
             outputs=[combo_tags, combo_explanation, combo_debug],
+        )
+
+        gr.Markdown("---\n#### 태그 프리셋 저장/불러오기")
+        with gr.Row():
+            preset_name = gr.Textbox(label="프리셋 이름", scale=2)
+            preset_save_btn = gr.Button("현재 결과 태그를 프리셋으로 저장", scale=1)
+        with gr.Row():
+            preset_dropdown = gr.Dropdown(
+                choices=list(preset_store.load_presets().keys()),
+                label="저장된 프리셋",
+                scale=2,
+            )
+            preset_load_btn = gr.Button("불러오기", scale=1)
+            preset_delete_btn = gr.Button("삭제", scale=1)
+        preset_status = gr.Markdown("")
+
+        def _save_preset(name, tags):
+            if not name or not name.strip():
+                return gr.update(), "프리셋 이름을 입력해주세요."
+            if not tags or not tags.strip():
+                return gr.update(), "저장할 태그가 없습니다."
+            new_presets = preset_store.save_preset(name, tags)
+            return gr.update(choices=list(new_presets.keys()), value=name.strip()), f"'{name.strip()}' 프리셋 저장 완료"
+
+        def _load_preset(name):
+            if not name:
+                return "", "프리셋을 선택해주세요."
+            presets = preset_store.load_presets()
+            return presets.get(name, ""), f"'{name}' 프리셋 불러옴"
+
+        def _delete_preset(name):
+            if not name:
+                return gr.update(), "삭제할 프리셋을 선택해주세요."
+            new_presets = preset_store.delete_preset(name)
+            return gr.update(choices=list(new_presets.keys()), value=None), f"'{name}' 프리셋 삭제됨"
+
+        preset_save_btn.click(
+            _save_preset, inputs=[preset_name, combo_tags], outputs=[preset_dropdown, preset_status]
+        )
+        preset_load_btn.click(
+            _load_preset, inputs=[preset_dropdown], outputs=[combo_tags, preset_status]
+        )
+        preset_delete_btn.click(
+            _delete_preset, inputs=[preset_dropdown], outputs=[preset_dropdown, preset_status]
         )
 
     with gr.Tab("3. 다중 씬(시리즈) 생성"):

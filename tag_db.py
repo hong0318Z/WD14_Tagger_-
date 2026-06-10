@@ -1,5 +1,6 @@
 import csv
 import io
+import os
 
 
 class TagDB:
@@ -17,7 +18,9 @@ class TagDB:
         if file_obj is None:
             return 0
 
-        if hasattr(file_obj, "name"):
+        if isinstance(file_obj, str) and os.path.exists(file_obj):
+            f = open(file_obj, "r", encoding="utf-8-sig", newline="")
+        elif hasattr(file_obj, "name"):
             f = open(file_obj.name, "r", encoding="utf-8-sig", newline="")
         else:
             f = io.StringIO(file_obj)
@@ -42,8 +45,7 @@ class TagDB:
                 "keywords": keywords,
             }
 
-        if hasattr(file_obj, "name"):
-            f.close()
+        f.close()
         return len(self.by_name)
 
     def __len__(self):
