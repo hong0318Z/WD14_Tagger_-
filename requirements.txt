@@ -1,0 +1,7 @@
+gradio
+onnxruntime
+huggingface_hub
+pandas
+Pillow
+numpy
+requests
