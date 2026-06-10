@@ -280,6 +280,9 @@ Given a description of a series of scenes (in Korean), output a single JSON obje
 
 Additional rules:
 - "scenePrompt" must follow the PROMPT GROUPING RULES above (curly-brace groups, English danbooru tags).
+- You will be given a list of candidate tags retrieved from a tag database. Prefer these tags when they fit, \
+since they are confirmed to exist in the database. You may still add common, well-known danbooru/NovelAI \
+tags (quality, composition, etc.) that are not in the candidate list.
 - Scene "name" codes must follow the NAMING RULE ([char]_[category]_[number]) using the CHARS/CATEGORIES \
 the user provides (or sensible defaults if none given), and the number should reflect the \
 NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
@@ -297,11 +300,32 @@ OUTPUT FORMAT - respond with EXACTLY two sections, in this order, and nothing el
 Do not put any description text inside the JSON section. Do not add commentary outside these two sections."""
 
 
-def generate_multi_scene(api_key, description, char_def, standing_notes: str = ""):
+def generate_multi_scene(api_key, description, char_def, db: TagDB, standing_notes: str = ""):
     if not api_key:
-        return "", "", "DeepSeek API 키를 입력해주세요."
+        return "", "", "DeepSeek API 키를 입력해주세요.", ""
     if not description or not description.strip():
-        return "", "", "시리즈 설명을 입력해주세요."
+        return "", "", "시리즈 설명을 입력해주세요.", ""
+
+    candidates_text = "(태그 DB가 업로드되지 않았습니다)"
+    if db is not None and len(db) > 0:
+        # Step 1: ask DeepSeek for the visual concepts needed across all scenes
+        concept_messages = [
+            {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
+            {"role": "user", "content": description},
+        ]
+        raw_concepts = deepseek_client.chat(
+            api_key, concept_messages, temperature=0.5,
+            response_format={"type": "json_object"},
+        )
+        try:
+            concepts = json.loads(raw_concepts).get("concepts", [])
+        except json.JSONDecodeError:
+            concepts = [description]
+
+        # Step 2: python looks up matching tags in the local tag DB
+        candidates = db.candidates_for_terms(concepts, per_term_limit=8)
+        candidate_lines = [f"{c['name']} : {c['description']}" for c in candidates]
+        candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
 
     base_ts = int(time.time() * 1000)
     user_content = (
@@ -316,6 +340,10 @@ def generate_multi_scene(api_key, description, char_def, standing_notes: str = "
             f"STANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
             f"they fix things the AI previously got wrong):\n{standing_notes.strip()}\n\n"
         )
+    user_content += (
+        f"Candidate tags from the database (prefer these when they fit, "
+        f"since they are confirmed to exist):\n{candidates_text}\n\n"
+    )
     user_content += f"Series description:\n{description}"
     messages = [
         {"role": "system", "content": MULTI_SCENE_SYSTEM_PROMPT},
@@ -329,12 +357,14 @@ def generate_multi_scene(api_key, description, char_def, standing_notes: str = "
         json_part = raw.split("===JSON===", 1)[1].split("===DESCRIPTIONS===")[0].strip()
         description_part = raw.split("===DESCRIPTIONS===", 1)[1].strip()
 
+    debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 ---\n" + raw
+
     try:
         parsed = json.loads(json_part)
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-        return pretty, description_part, "생성 완료"
+        return pretty, description_part, "생성 완료", debug_info
     except json.JSONDecodeError:
-        return json_part, description_part, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다."
+        return json_part, description_part, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info
 
 
 # ---------------------------------------------------------------------------
@@ -535,11 +565,12 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
         series_status = gr.Markdown("")
         series_output = gr.Code(label="결과 JSON (NAI 프리셋에 그대로 붙여넣기)", language="json", lines=25)
         series_descriptions = gr.Textbox(label="씬별 설명 (한국어, 별도 메모용)", lines=10)
+        series_debug = gr.Textbox(label="디버그 (검색된 후보 태그 / AI 원본 응답)", lines=15)
 
         series_btn.click(
             generate_multi_scene,
-            inputs=[deepseek_key, series_description, series_chars, standing_notes],
-            outputs=[series_output, series_descriptions, series_status],
+            inputs=[deepseek_key, series_description, series_chars, db_state, standing_notes],
+            outputs=[series_output, series_descriptions, series_status, series_debug],
         )
 
     with gr.Tab("4. 에셋 시스템 / EXIF 분석"):
