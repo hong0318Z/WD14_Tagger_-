@@ -82,9 +82,10 @@ def load_tag_db(file_obj):
 
 
 def load_saved_state():
-    """Called on app startup: restore the DeepSeek API key and tag DB from disk."""
+    """Called on app startup: restore the DeepSeek API key, tag DB, and standing notes from disk."""
     cfg = local_config.load_config()
     api_key = cfg.get("deepseek_api_key", "")
+    notes = cfg.get("standing_notes", "")
 
     db = TagDB()
     status = "태그 DB가 로드되지 않았습니다. (선택 사항)"
@@ -93,12 +94,17 @@ def load_saved_state():
         if count:
             status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
 
-    return api_key, db, status
+    return api_key, db, status, notes
 
 
 def save_api_key(key):
     local_config.save_config(deepseek_api_key=key or "")
     return key
+
+
+def save_notes(notes):
+    local_config.save_config(standing_notes=notes or "")
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +181,7 @@ The "tags" field must be in English, formatted per the grouping rules above (cur
 The "explanation" field must be written in Korean, briefly explaining the composition and why these tags were chosen."""
 
 
-def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int):
+def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int, standing_notes: str = ""):
     if not api_key:
         return "", "DeepSeek API 키를 입력해주세요.", ""
     if not user_request or not user_request.strip():
@@ -186,9 +192,15 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int):
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     # Step 1: ask DeepSeek for required concepts
+    step1_user_content = user_request
+    if standing_notes and standing_notes.strip():
+        step1_user_content += (
+            f"\n\nSTANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
+            f"they fix things the AI previously got wrong):\n{standing_notes.strip()}"
+        )
     step1_messages = [
         {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
-        {"role": "user", "content": user_request},
+        {"role": "user", "content": step1_user_content},
     ]
     raw_concepts = deepseek_client.chat(
         api_key, step1_messages, temperature=0.5,
@@ -212,6 +224,11 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int):
         f"Number of variants requested: {variant_count}\n\n"
         f"Candidate tags from the database:\n{candidates_text}"
     )
+    if standing_notes and standing_notes.strip():
+        step2_user_content += (
+            f"\n\nSTANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
+            f"they fix things the AI previously got wrong):\n{standing_notes.strip()}"
+        )
     step2_messages = [
         {"role": "system", "content": FINAL_SYSTEM_PROMPT},
         {"role": "user", "content": step2_user_content},
@@ -285,7 +302,7 @@ each with the matching "name" and a Korean description of what happens in that s
 - Output ONLY the JSON object, no extra commentary."""
 
 
-def generate_multi_scene(api_key, description, char_def):
+def generate_multi_scene(api_key, description, char_def, standing_notes: str = ""):
     if not api_key:
         return "", "DeepSeek API 키를 입력해주세요."
     if not description or not description.strip():
@@ -299,6 +316,11 @@ def generate_multi_scene(api_key, description, char_def):
     )
     if char_def and char_def.strip():
         user_content += f"CHARS / CATEGORIES for naming: {char_def.strip()}\n\n"
+    if standing_notes and standing_notes.strip():
+        user_content += (
+            f"STANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
+            f"they fix things the AI previously got wrong):\n{standing_notes.strip()}\n\n"
+        )
     user_content += f"Series description:\n{description}"
     messages = [
         {"role": "system", "content": MULTI_SCENE_SYSTEM_PROMPT},
@@ -414,10 +436,16 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
         )
         tag_db_file = gr.File(label="단부루 태그 CSV 업로드 (선택, 서버에 저장되어 재시작 후에도 유지됨)", file_types=[".csv"])
         tag_db_status = gr.Markdown("태그 DB가 로드되지 않았습니다. (선택 사항)")
+        standing_notes = gr.Textbox(
+            label="고정 지시사항 / 메모 (탭2, 탭3 생성 시 항상 함께 전달됨, 서버에 저장되어 유지됨)",
+            placeholder="예: faceless male은 항상 얼굴 태그를 넣지 말 것. 배경은 항상 실내로.",
+            lines=4,
+        )
 
-        demo.load(load_saved_state, inputs=None, outputs=[deepseek_key, db_state, tag_db_status])
+        demo.load(load_saved_state, inputs=None, outputs=[deepseek_key, db_state, tag_db_status, standing_notes])
         deepseek_key.change(save_api_key, inputs=deepseek_key, outputs=None)
         tag_db_file.change(load_tag_db, inputs=tag_db_file, outputs=[db_state, tag_db_status])
+        standing_notes.change(save_notes, inputs=standing_notes, outputs=None)
 
     with gr.Tab("1. 이미지 태그 분석"):
         with gr.Row():
@@ -450,7 +478,7 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
 
         combo_btn.click(
             generate_tag_combo,
-            inputs=[deepseek_key, combo_request, db_state, combo_variant_count],
+            inputs=[deepseek_key, combo_request, db_state, combo_variant_count, standing_notes],
             outputs=[combo_tags, combo_explanation, combo_debug],
         )
 
@@ -510,7 +538,7 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
 
         series_btn.click(
             generate_multi_scene,
-            inputs=[deepseek_key, series_description, series_chars],
+            inputs=[deepseek_key, series_description, series_chars, standing_notes],
             outputs=[series_output, series_status],
         )
 
