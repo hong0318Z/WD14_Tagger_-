@@ -3,12 +3,16 @@ import json
 from PIL import Image
 
 
-def read_image_metadata(image: Image.Image):
-    """Returns (raw_metadata_text, extracted_prompt) for a PIL image.
+def read_image_metadata(image_path: str):
+    """Returns (raw_metadata_text, extracted_prompt) for an image file.
 
     Looks at PNG text chunks commonly used by NAI / Stable Diffusion
     (e.g. "parameters", "Comment", "Software", "Description").
+    A file path is required (not a re-encoded PIL image) because
+    re-encoding via libraries like Gradio's Image component strips
+    these text chunks.
     """
+    image = Image.open(image_path)
     info = image.info or {}
     if not info:
         return "메타데이터가 없습니다 (이미지에 PNG info 청크가 없음).", ""

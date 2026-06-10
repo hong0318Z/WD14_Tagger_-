@@ -2,7 +2,6 @@ import json
 import time
 
 import gradio as gr
-from PIL import Image
 
 import deepseek_client
 from exif_reader import read_image_metadata
@@ -278,10 +277,10 @@ def generate_asset_output(api_key, mode_label, char_def, user_input):
     return deepseek_client.chat(api_key, messages, temperature=0.7)
 
 
-def analyze_image_metadata(image: Image.Image):
-    if image is None:
+def analyze_image_metadata(image_path):
+    if image_path is None:
         return "이미지를 업로드해주세요.", ""
-    raw, prompt = read_image_metadata(image)
+    raw, prompt = read_image_metadata(image_path)
     return raw, prompt
 
 
@@ -359,7 +358,7 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
         gr.Markdown("### 이미지 메타데이터(EXIF/PNG info) 분석")
         with gr.Row():
             with gr.Column():
-                exif_image = gr.Image(type="pil", label="이미지 업로드")
+                exif_image = gr.Image(type="filepath", label="이미지 업로드 (원본 메타데이터 보존)")
                 exif_btn = gr.Button("메타데이터 분석")
             with gr.Column():
                 exif_prompt = gr.Textbox(label="추출된 프롬프트 (있는 경우)", lines=4)
