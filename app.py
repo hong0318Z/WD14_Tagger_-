@@ -21,8 +21,8 @@ EXAMPLE_PRESET = {
     "scenes": [
         {
             "id": "<timestamp_ms>",
-            "name": "<short scene code>",
-            "scenePrompt": "<comma separated danbooru tags in English>",
+            "name": "<short scene code, e.g. m_s_1>",
+            "scenePrompt": "<grouped danbooru tags in English, see ASSET_GROUPING_RULES>",
             "queueCount": 0,
             "images": [],
             "createdAt": "<timestamp_ms>",
@@ -30,8 +30,41 @@ EXAMPLE_PRESET = {
             "height": 832,
         }
     ],
+    "sceneDescriptions": [
+        {
+            "name": "<same scene code as scenes[].name>",
+            "description": "<한국어로 이 씬이 어떤 장면인지 서술>",
+        }
+    ],
     "createdAt": "<timestamp_ms>",
 }
+
+ASSET_GROUPING_RULES = """[IMAGE ASSET SYSTEM - PROMPT GROUPING RULES]
+
+NAMING RULE for scene/file codes: [char]_[category]_[number]
+NUMBER MEANING: 1-3=resistance/daily, 4-6=acceptance, 7-9=indulgence, 10+=full corruption
+CATEGORIES: loc=location sex=intercourse orl=oral fpl=foreplay emo=expression com=daily grp=group (expand as needed)
+CHARS: defined per project by the user (e.g. a=Alice, b=Bob)
+
+PROMPT GROUPING (MODE 2 style):
+Every generated prompt MUST be a single line where tags are grouped thematically inside curly braces { }, \
+groups separated by ", ". Use this group order:
+{quality}, {background}, {composition / camera angle}, [for each character present, two adjacent groups:] \
+{that character's appearance traits}, {that character's pose / action / composition role}, {clothing}, {expression / emotional state / effects}
+
+Rules:
+- Each character gets its OWN pair of groups: one group for fixed appearance traits (body type, hair, skin, \
+distinguishing features, "1girl"/"1boy"/"faceless male" etc.), and a separate adjacent group for that \
+character's pose/action/role in the composition. Keeping these separate makes later edits easy \
+(e.g. swap only the pose group without touching appearance).
+- If male and female characters are both present, output the male group(s) first, then the female group(s), \
+matching the example order: {male appearance}, {male pose/action}, {female appearance}, {female pose/action}.
+- Quality tags first, then background, then composition/camera angle.
+- Expression / emotional state / effect tags (blush, sweat, tears, trembling, etc.) always go in the LAST group.
+- All tags inside groups must be in English, danbooru-style, comma separated within each group.
+EXAMPLE: {masterpiece, best quality, highres}, {dark background}, {full body shot, from side}, \
+{1boy, dark-skinned male, bald, faceless}, {standing, gripping her hips}, \
+{1girl, long hair, black pubic hair}, {lying on back, legs spread}, {nude}, {blushing, trembling, biting lip, shame}"""
 
 
 def load_tag_db(file_obj):
@@ -120,41 +153,37 @@ Produce at least 10-15 concepts in total so the final prompt can be rich and wel
 Each concept should be a short English phrase describing ONE visual element. \
 Do not include any explanation, only the JSON."""
 
-FINAL_SYSTEM_PROMPT = """You are an assistant that builds a final danbooru tag prompt for an image generation model (NovelAI style).
-You will receive the user's original request (possibly in Korean) and a list of candidate tags \
-retrieved from a tag database, each with a Korean description.
+FINAL_SYSTEM_PROMPT = """You are an assistant that builds final danbooru tag prompts for an image generation model (NovelAI style).
+You will receive the user's original request (possibly in Korean), a list of candidate tags \
+retrieved from a tag database (each with a Korean description), and a requested number of variants.
 
-Build a long, well-composed comma-separated list of English danbooru tags, grouped conceptually in this order:
-1. quality tags (e.g. masterpiece, best quality, highres)
-2. composition / camera angle / shot framing tags
-3. background / setting tags
-4. character count and type tags (e.g. 1girl, 1boy, faceless male)
-5. character physical feature tags
-6. clothing tags
-7. pose / action / position tags
-8. expression / emotional state / effect tags (sweat, blush, tears, etc.)
+""" + ASSET_GROUPING_RULES + """
 
-Rules:
+Additional rules:
 - Prefer tags from the candidate list when they fit, since those are confirmed to exist in the tag database.
 - If the candidate list is missing tags needed for composition, camera angle, quality, or background, \
 you MAY add common, well-known danbooru/NovelAI tags for those even if they are not in the candidate list.
-- The result should be a single, detailed, well-composed prompt (aim for 20-35 tags total), not a short list.
+- Each variant should be a single, detailed, well-composed prompt (aim for 20-35 tags total across all groups).
 - Use underscores or spaces as found in the candidates for tags taken from the database; \
 for added tags, use standard danbooru tag formatting (lowercase, underscores between words).
+- If multiple variants are requested, make them meaningfully different (different composition/pose/angle) \
+while staying consistent with the user's request.
 
 Respond ONLY with a JSON object of the form:
-{"tags": "tag1, tag2, tag3, ...", "explanation": "<설명을 한국어로 작성>"}
-The "tags" field must be in English and follow the grouping order above (comma separated, no curly braces). \
+{"variants": [{"tags": "{group1}, {group2}, ...", "explanation": "<설명을 한국어로 작성>"}, ...]}
+The "tags" field must be in English, formatted per the grouping rules above (curly braces around each group). \
 The "explanation" field must be written in Korean, briefly explaining the composition and why these tags were chosen."""
 
 
-def generate_tag_combo(api_key, user_request, db: TagDB):
+def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int):
     if not api_key:
         return "", "DeepSeek API 키를 입력해주세요.", ""
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", ""
     if db is None or len(db) == 0:
         return "", "먼저 태그 DB(CSV)를 업로드해주세요.", ""
+
+    variant_count = max(1, min(int(variant_count or 1), 5))
 
     # Step 1: ask DeepSeek for required concepts
     step1_messages = [
@@ -177,9 +206,10 @@ def generate_tag_combo(api_key, user_request, db: TagDB):
     ]
     candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
 
-    # Step 3: ask DeepSeek to compose the final tag prompt
+    # Step 3: ask DeepSeek to compose the final tag prompt(s)
     step2_user_content = (
         f"User request:\n{user_request}\n\n"
+        f"Number of variants requested: {variant_count}\n\n"
         f"Candidate tags from the database:\n{candidates_text}"
     )
     step2_messages = [
@@ -187,19 +217,27 @@ def generate_tag_combo(api_key, user_request, db: TagDB):
         {"role": "user", "content": step2_user_content},
     ]
     raw_final = deepseek_client.chat(
-        api_key, step2_messages, temperature=0.7,
+        api_key, step2_messages, temperature=0.8,
         response_format={"type": "json_object"},
     )
     try:
         final = json.loads(raw_final)
-        tags = final.get("tags", "")
-        explanation = final.get("explanation", "")
+        variants = final.get("variants", [])
     except json.JSONDecodeError:
-        tags = raw_final
-        explanation = ""
+        variants = [{"tags": raw_final, "explanation": ""}]
+
+    if not variants:
+        variants = [{"tags": "", "explanation": "결과를 생성하지 못했습니다."}]
+
+    tags_blocks = []
+    explanation_blocks = []
+    for i, v in enumerate(variants, start=1):
+        prefix = f"--- Variant {i} ---\n" if len(variants) > 1 else ""
+        tags_blocks.append(prefix + v.get("tags", ""))
+        explanation_blocks.append(prefix + v.get("explanation", ""))
 
     debug_info = "검색된 후보 태그:\n" + candidates_text
-    return tags, explanation, debug_info
+    return "\n\n".join(tags_blocks), "\n\n".join(explanation_blocks), debug_info
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +253,8 @@ Given a description of a series of scenes (in Korean), output a single JSON obje
   "scenes": [
     {
       "id": "<13-digit timestamp string, unique per scene>",
-      "name": "<short scene code, e.g. m_s_1>",
-      "scenePrompt": "<comma-separated danbooru tags in English describing this scene>",
+      "name": "<short scene code following the NAMING RULE below, e.g. m_s_1>",
+      "scenePrompt": "<grouped danbooru tags in English, see PROMPT GROUPING RULES below>",
       "queueCount": 0,
       "images": [],
       "createdAt": <same number as id, as an integer>,
@@ -224,19 +262,30 @@ Given a description of a series of scenes (in Korean), output a single JSON obje
       "height": 832
     }
   ],
+  "sceneDescriptions": [
+    {
+      "name": "<same scene code as the corresponding scenes[].name>",
+      "description": "<이 씬이 어떤 장면인지 한국어로 서술>"
+    }
+  ],
   "createdAt": <same number as the top-level id, as an integer>
 }
 
-Rules:
-- "scenePrompt" must be written in English using danbooru-style tags, comma separated.
-- You may use weighting syntax like "tag::weight::" or "{tag}" or "<group/option>" if it helps express the scene, \
-following the style of typical NAI prompt presets.
+""" + ASSET_GROUPING_RULES + """
+
+Additional rules:
+- "scenePrompt" must follow the PROMPT GROUPING RULES above (curly-brace groups, English danbooru tags).
+- Scene "name" codes must follow the NAMING RULE ([char]_[category]_[number]) using the CHARS/CATEGORIES \
+the user provides (or sensible defaults if none given), and the number should reflect the \
+NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
+- "sceneDescriptions" must contain exactly one entry per scene, in the same order as "scenes", \
+each with the matching "name" and a Korean description of what happens in that scene.
 - Generate as many scenes as make sense for the user's description (each meaningful step/pose should be its own scene).
 - "id" and "createdAt" values must be plausible 13-digit millisecond timestamps, each scene with a distinct id.
 - Output ONLY the JSON object, no extra commentary."""
 
 
-def generate_multi_scene(api_key, description):
+def generate_multi_scene(api_key, description, char_def):
     if not api_key:
         return "", "DeepSeek API 키를 입력해주세요."
     if not description or not description.strip():
@@ -247,8 +296,10 @@ def generate_multi_scene(api_key, description):
         f"Reference structure (field names and types only, not real content):\n"
         f"{json.dumps(EXAMPLE_PRESET, ensure_ascii=False, indent=2)}\n\n"
         f"A timestamp around {base_ts} can be used as a base for generating IDs.\n\n"
-        f"Series description:\n{description}"
     )
+    if char_def and char_def.strip():
+        user_content += f"CHARS / CATEGORIES for naming: {char_def.strip()}\n\n"
+    user_content += f"Series description:\n{description}"
     messages = [
         {"role": "system", "content": MULTI_SCENE_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
@@ -391,14 +442,15 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
     with gr.Tab("2. 태그 조합 생성"):
         gr.Markdown("자연어로 원하는 이미지를 설명하면, 태그 DB에서 관련 태그를 찾아 AI가 조합해줍니다.")
         combo_request = gr.Textbox(label="요청 내용 (한국어 가능)", lines=4)
+        combo_variant_count = gr.Slider(1, 5, value=1, step=1, label="생성 개수 (variants)")
         combo_btn = gr.Button("태그 조합 생성", variant="primary")
-        combo_tags = gr.Textbox(label="결과 태그 (영어, 복사해서 사용)", lines=3)
+        combo_tags = gr.Textbox(label="결과 태그 (영어, {그룹} 단위로 구분됨, 복사해서 사용)", lines=6)
         combo_explanation = gr.Textbox(label="설명 (한국어)", lines=4)
         combo_debug = gr.Textbox(label="검색된 후보 태그 (디버그)", lines=10)
 
         combo_btn.click(
             generate_tag_combo,
-            inputs=[deepseek_key, combo_request, db_state],
+            inputs=[deepseek_key, combo_request, db_state, combo_variant_count],
             outputs=[combo_tags, combo_explanation, combo_debug],
         )
 
@@ -448,6 +500,9 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
 
     with gr.Tab("3. 다중 씬(시리즈) 생성"):
         gr.Markdown("시리즈에 대한 설명을 입력하면, NAIS 프리셋 JSON 형식으로 여러 씬의 프롬프트를 생성합니다.")
+        series_chars = gr.Textbox(
+            label="캐릭터/카테고리 정의 (선택, 예: a=Alice, b=Bob, 카테고리는 기본값 사용)", lines=1
+        )
         series_description = gr.Textbox(label="시리즈 설명 (한국어)", lines=6)
         series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
         series_status = gr.Markdown("")
@@ -455,7 +510,7 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
 
         series_btn.click(
             generate_multi_scene,
-            inputs=[deepseek_key, series_description],
+            inputs=[deepseek_key, series_description, series_chars],
             outputs=[series_output, series_status],
         )
 
