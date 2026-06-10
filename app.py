@@ -2,8 +2,10 @@ import json
 import time
 
 import gradio as gr
+from PIL import Image
 
 import deepseek_client
+from exif_reader import read_image_metadata
 from tag_db import TagDB
 from wd14_tagger import predict
 
@@ -203,6 +205,87 @@ def generate_multi_scene(api_key, description):
 
 
 # ---------------------------------------------------------------------------
+# Tab 4: Image Asset System (filename / prompt / asset guide)
+# ---------------------------------------------------------------------------
+
+ASSET_SYSTEM_PROMPT = """[IMAGE ASSET SYSTEM]
+
+NAMING RULE: [char]_[category]_[number]
+NUMBER MEANING: 1-3=resistance/daily 4-6=acceptance 7-9=indulgence 10+=full corruption
+
+CHARS: defined per project by the user (e.g. a=Alice b=Bob)
+CATEGORIES: loc=location sex=intercourse orl=oral fpl=foreplay emo=expression com=daily grp=group (expand as needed)
+
+---
+
+MODE 1 - FILENAME DEFINITION
+TRIGGER: "define filename" / "create series"
+OUTPUT FORMAT:
+SERIES: [series_name]
+[char]_[cat]_[number]: [keywords only, comma separated]
+RULES: no sentences, keywords only, follow number meaning
+
+---
+
+MODE 2 - PROMPT GENERATION
+TRIGGER: "generate prompt" / "NAI prompt"
+OUTPUT FORMAT (single line, groups in {}, comma separated tags inside):
+{quality}, {background}, {male if present}, {female + physical features}, {clothing}, {act/position}, {expression/emotional state}
+RULES: English tags only, each thematic group wrapped in {}, written as ONE single line, character-specific fixed traits always included in their {}, emotions concentrated in last {}
+EXAMPLE: {masterpiece, best quality, highres}, {dark background}, {1dark-skinned male, bald, faceless}, {1girl, black pubic hair, sweat}, {full nelson, standing sex}, {blushing, trembling, biting lip, shame}
+
+---
+
+MODE 3 - ASSET GUIDE WRITE
+TRIGGER: "write asset guide" / "create guide"
+OUTPUT FORMAT:
+[SERIES NAME]
+FORMAT: [char]_[cat]_[number]
+1-3:[summary] 4-6:[summary] 7-9:[summary] 10+:[summary]
+ENTRIES: _1:[keywords] _2:[keywords] _3:[keywords] ...
+RULES: no USAGE GUIDELINES section, no sentences, keywords and numbers only
+
+---
+
+GENERAL RULES:
+- Output tags / keywords / prompts in English.
+- Any free-text explanation outside the required output format must be written in Korean.
+- Strictly follow the OUTPUT FORMAT of the requested mode, no extra sections."""
+
+MODE_TRIGGERS = {
+    "1. 파일명 정의 (define filename)": "define filename",
+    "2. NAI 프롬프트 생성 (generate prompt)": "generate prompt",
+    "3. 에셋 가이드 작성 (write asset guide)": "write asset guide",
+}
+
+
+def generate_asset_output(api_key, mode_label, char_def, user_input):
+    if not api_key:
+        return "DeepSeek API 키를 입력해주세요."
+    if not user_input or not user_input.strip():
+        return "내용을 입력해주세요."
+
+    trigger = MODE_TRIGGERS[mode_label]
+    user_content = trigger
+    if char_def and char_def.strip():
+        user_content += f"\n\nCHARS: {char_def.strip()}"
+    user_content += f"\n\n{user_input.strip()}"
+
+    messages = [
+        {"role": "system", "content": ASSET_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+    return deepseek_client.chat(api_key, messages, temperature=0.7)
+
+
+def analyze_image_metadata(image: Image.Image):
+    if image is None:
+        return "이미지를 업로드해주세요.", ""
+    raw, prompt = read_image_metadata(image)
+    return raw, prompt
+
+
+# ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 
@@ -270,6 +353,41 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
             generate_multi_scene,
             inputs=[deepseek_key, series_description],
             outputs=[series_output, series_status],
+        )
+
+    with gr.Tab("4. 에셋 시스템 / EXIF 분석"):
+        gr.Markdown("### 이미지 메타데이터(EXIF/PNG info) 분석")
+        with gr.Row():
+            with gr.Column():
+                exif_image = gr.Image(type="pil", label="이미지 업로드")
+                exif_btn = gr.Button("메타데이터 분석")
+            with gr.Column():
+                exif_prompt = gr.Textbox(label="추출된 프롬프트 (있는 경우)", lines=4)
+                exif_raw = gr.Textbox(label="원본 메타데이터", lines=12)
+
+        exif_btn.click(
+            analyze_image_metadata,
+            inputs=[exif_image],
+            outputs=[exif_raw, exif_prompt],
+        )
+
+        gr.Markdown("---\n### 이미지 에셋 시스템 (파일명 정의 / NAI 프롬프트 생성 / 에셋 가이드)")
+        asset_mode = gr.Radio(
+            choices=list(MODE_TRIGGERS.keys()),
+            value=list(MODE_TRIGGERS.keys())[1],
+            label="모드 선택",
+        )
+        asset_chars = gr.Textbox(
+            label="캐릭터 정의 (선택, 예: a=Alice, b=Bob)", lines=1
+        )
+        asset_input = gr.Textbox(label="요청 내용 (한국어 가능)", lines=6)
+        asset_btn = gr.Button("생성", variant="primary")
+        asset_output = gr.Textbox(label="결과", lines=12)
+
+        asset_btn.click(
+            generate_asset_output,
+            inputs=[deepseek_key, asset_mode, asset_chars, asset_input],
+            outputs=[asset_output],
         )
 
 
