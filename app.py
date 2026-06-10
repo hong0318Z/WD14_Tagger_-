@@ -30,12 +30,6 @@ EXAMPLE_PRESET = {
             "height": 832,
         }
     ],
-    "sceneDescriptions": [
-        {
-            "name": "<same scene code as scenes[].name>",
-            "description": "<한국어로 이 씬이 어떤 장면인지 서술>",
-        }
-    ],
     "createdAt": "<timestamp_ms>",
 }
 
@@ -279,12 +273,6 @@ Given a description of a series of scenes (in Korean), output a single JSON obje
       "height": 832
     }
   ],
-  "sceneDescriptions": [
-    {
-      "name": "<same scene code as the corresponding scenes[].name>",
-      "description": "<이 씬이 어떤 장면인지 한국어로 서술>"
-    }
-  ],
   "createdAt": <same number as the top-level id, as an integer>
 }
 
@@ -295,18 +283,25 @@ Additional rules:
 - Scene "name" codes must follow the NAMING RULE ([char]_[category]_[number]) using the CHARS/CATEGORIES \
 the user provides (or sensible defaults if none given), and the number should reflect the \
 NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
-- "sceneDescriptions" must contain exactly one entry per scene, in the same order as "scenes", \
-each with the matching "name" and a Korean description of what happens in that scene.
 - Generate as many scenes as make sense for the user's description (each meaningful step/pose should be its own scene).
 - "id" and "createdAt" values must be plausible 13-digit millisecond timestamps, each scene with a distinct id.
-- Output ONLY the JSON object, no extra commentary."""
+
+OUTPUT FORMAT - respond with EXACTLY two sections, in this order, and nothing else:
+
+===JSON===
+<the JSON object described above, valid JSON, ready to be pasted directly into the NAI preset tool>
+
+===DESCRIPTIONS===
+<one line per scene, format: "[scene name]: [한국어로 이 씬이 어떤 장면인지 서술]">
+
+Do not put any description text inside the JSON section. Do not add commentary outside these two sections."""
 
 
 def generate_multi_scene(api_key, description, char_def, standing_notes: str = ""):
     if not api_key:
-        return "", "DeepSeek API 키를 입력해주세요."
+        return "", "", "DeepSeek API 키를 입력해주세요."
     if not description or not description.strip():
-        return "", "시리즈 설명을 입력해주세요."
+        return "", "", "시리즈 설명을 입력해주세요."
 
     base_ts = int(time.time() * 1000)
     user_content = (
@@ -326,16 +321,20 @@ def generate_multi_scene(api_key, description, char_def, standing_notes: str = "
         {"role": "system", "content": MULTI_SCENE_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
-    raw = deepseek_client.chat(
-        api_key, messages, temperature=0.8,
-        response_format={"type": "json_object"},
-    )
+    raw = deepseek_client.chat(api_key, messages, temperature=0.8)
+
+    json_part = raw
+    description_part = ""
+    if "===JSON===" in raw and "===DESCRIPTIONS===" in raw:
+        json_part = raw.split("===JSON===", 1)[1].split("===DESCRIPTIONS===")[0].strip()
+        description_part = raw.split("===DESCRIPTIONS===", 1)[1].strip()
+
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(json_part)
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-        return pretty, "생성 완료"
+        return pretty, description_part, "생성 완료"
     except json.JSONDecodeError:
-        return raw, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다."
+        return json_part, description_part, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다."
 
 
 # ---------------------------------------------------------------------------
@@ -534,12 +533,13 @@ with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
         series_description = gr.Textbox(label="시리즈 설명 (한국어)", lines=6)
         series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
         series_status = gr.Markdown("")
-        series_output = gr.Code(label="결과 JSON", language="json", lines=25)
+        series_output = gr.Code(label="결과 JSON (NAI 프리셋에 그대로 붙여넣기)", language="json", lines=25)
+        series_descriptions = gr.Textbox(label="씬별 설명 (한국어, 별도 메모용)", lines=10)
 
         series_btn.click(
             generate_multi_scene,
             inputs=[deepseek_key, series_description, series_chars, standing_notes],
-            outputs=[series_output, series_status],
+            outputs=[series_output, series_descriptions, series_status],
         )
 
     with gr.Tab("4. 에셋 시스템 / EXIF 분석"):
