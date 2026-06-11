@@ -397,7 +397,6 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     raw = ""
     for raw in deepseek_client.chat_stream(
         api_key, messages, temperature=0.8,
-        response_format={"type": "json_object"},
     ):
         debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
         yield raw, "", "JSON 생성 중...", debug_info, history
@@ -412,6 +411,13 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
                 {"role": "assistant", "content": raw},
             ]
         )
+
+    json_part = json_part.strip()
+    if json_part.startswith("```"):
+        json_part = json_part.split("\n", 1)[1] if "\n" in json_part else json_part
+        if json_part.endswith("```"):
+            json_part = json_part[:-3]
+        json_part = json_part.strip()
 
     try:
         parsed = json.loads(json_part)
