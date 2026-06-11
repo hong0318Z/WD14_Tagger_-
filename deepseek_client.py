@@ -6,9 +6,9 @@ import requests
 API_URL = "https://api.deepseek.com/chat/completions"
 MODEL = "deepseek-v4-pro"
 MAX_CONTEXT_TOKENS = 160000
-MAX_TOKENS = 16000
+MAX_TOKENS = 50000
 MAX_HISTORY_MESSAGES = 20  # cap on accumulated user/assistant messages (excluding system)
-REQUEST_TIMEOUT = 90  # seconds
+REQUEST_TIMEOUT = 180  # seconds
 
 
 def trim_history(history: list) -> list:
