@@ -182,7 +182,8 @@ The "explanation" field must be written in Korean, briefly explaining the compos
 
 
 def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
-                        standing_notes: str = "", history: list = None, accumulate: bool = False):
+                        standing_notes: str = "", history: list = None, accumulate: bool = False,
+                        model: str = None):
     history = history or []
     if not api_key:
         return "", "DeepSeek API 키를 입력해주세요.", "", history
@@ -194,12 +195,12 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate)
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model)
     except (RuntimeError, ValueError) as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate):
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model):
     # Step 1: ask DeepSeek for required concepts
     step1_user_content = user_request
     if standing_notes and standing_notes.strip():
@@ -213,7 +214,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
     ]
     raw_concepts = deepseek_client.chat(
         api_key, step1_messages, temperature=0.5,
-        response_format={"type": "json_object"},
+        response_format={"type": "json_object"}, model=model,
     )
     try:
         concepts = json.loads(raw_concepts).get("concepts", [])
@@ -245,7 +246,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
 
     raw_final = deepseek_client.chat(
         api_key, step2_messages, temperature=0.8,
-        response_format={"type": "json_object"},
+        response_format={"type": "json_object"}, model=model,
     )
     try:
         final = json.loads(raw_final)
@@ -332,7 +333,8 @@ No extra commentary, no headers."""
 
 
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
-                          standing_notes: str = "", history: list = None, accumulate: bool = False):
+                          standing_notes: str = "", history: list = None, accumulate: bool = False,
+                          model: str = None):
     history = history or []
     if not api_key:
         yield "", "", "DeepSeek API 키를 입력해주세요.", "", history
@@ -342,13 +344,13 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model):
             yield item
     except (RuntimeError, ValueError) as e:
         yield "", "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model):
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
     if db is not None and len(db) > 0:
         # Step 1: ask DeepSeek for the visual concepts needed across all scenes
@@ -358,7 +360,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         ]
         raw_concepts = deepseek_client.chat(
             api_key, concept_messages, temperature=0.5,
-            response_format={"type": "json_object"},
+            response_format={"type": "json_object"}, model=model,
         )
         try:
             concepts = json.loads(raw_concepts).get("concepts", [])
@@ -397,7 +399,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     raw = ""
     finish_reason = None
     for raw, finish_reason in deepseek_client.chat_stream(
-        api_key, messages, temperature=0.8,
+        api_key, messages, temperature=0.8, model=model,
     ):
         debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
         yield raw, "", "JSON 생성 중...", debug_info, history
@@ -450,7 +452,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         )},
     ]
     description_part = ""
-    for description_part, _finish_reason in deepseek_client.chat_stream(api_key, desc_messages, temperature=0.5):
+    for description_part, _finish_reason in deepseek_client.chat_stream(api_key, desc_messages, temperature=0.5, model=model):
         debug_info = (
             "검색된 후보 태그:\n" + candidates_text
             + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
@@ -521,7 +523,8 @@ MODE_TRIGGERS = {
 }
 
 
-def generate_asset_output(api_key, mode_label, char_def, user_input, history: list = None, accumulate: bool = False):
+def generate_asset_output(api_key, mode_label, char_def, user_input, history: list = None, accumulate: bool = False,
+                           model: str = None):
     history = history or []
     if not api_key:
         return "DeepSeek API 키를 입력해주세요.", history
@@ -529,12 +532,12 @@ def generate_asset_output(api_key, mode_label, char_def, user_input, history: li
         return "내용을 입력해주세요.", history
 
     try:
-        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate)
+        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model)
     except (RuntimeError, ValueError) as e:
         return f"오류 발생: {e}", history
 
 
-def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate):
+def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model):
     trigger = MODE_TRIGGERS[mode_label]
     user_content = trigger
     if char_def and char_def.strip():
@@ -546,7 +549,7 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
         messages += deepseek_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
 
-    result = deepseek_client.chat(api_key, messages, temperature=0.7)
+    result = deepseek_client.chat(api_key, messages, temperature=0.7, model=model)
 
     new_history = history
     if accumulate:

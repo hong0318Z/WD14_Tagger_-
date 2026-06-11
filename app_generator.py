@@ -22,6 +22,11 @@ with gr.Blocks(title="DeepSeek Prompt Generator") as demo:
             type="password",
             placeholder="sk-...",
         )
+        model_select = gr.Dropdown(
+            label="모델 선택 (Pro: 고품질/느림, Flash: 빠름)",
+            choices=deepseek_client.AVAILABLE_MODELS,
+            value=deepseek_client.MODEL,
+        )
         tag_db_file = gr.File(label="단부루 태그 CSV 업로드 (선택, 서버에 저장되어 재시작 후에도 유지됨)", file_types=[".csv"])
         tag_db_status = gr.Markdown("태그 DB가 로드되지 않았습니다. (선택 사항)")
         standing_notes = gr.Textbox(
@@ -69,7 +74,7 @@ with gr.Blocks(title="DeepSeek Prompt Generator") as demo:
         combo_btn.click(
             core.generate_tag_combo,
             inputs=[deepseek_key, combo_request, db_state, combo_variant_count, standing_notes,
-                    history_state, accumulate_context],
+                    history_state, accumulate_context, model_select],
             outputs=[combo_tags, combo_explanation, combo_debug, history_state],
         )
 
@@ -132,7 +137,7 @@ with gr.Blocks(title="DeepSeek Prompt Generator") as demo:
         series_btn.click(
             core.generate_multi_scene,
             inputs=[deepseek_key, series_description, series_chars, db_state, standing_notes,
-                    history_state, accumulate_context],
+                    history_state, accumulate_context, model_select],
             outputs=[series_output, series_descriptions, series_status, series_debug, history_state],
         )
 
@@ -152,7 +157,7 @@ with gr.Blocks(title="DeepSeek Prompt Generator") as demo:
 
         asset_btn.click(
             core.generate_asset_output,
-            inputs=[deepseek_key, asset_mode, asset_chars, asset_input, history_state, accumulate_context],
+            inputs=[deepseek_key, asset_mode, asset_chars, asset_input, history_state, accumulate_context, model_select],
             outputs=[asset_output, history_state],
         )
 

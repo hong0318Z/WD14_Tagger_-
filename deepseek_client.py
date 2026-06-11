@@ -5,6 +5,7 @@ import requests
 
 API_URL = "https://api.deepseek.com/chat/completions"
 MODEL = "deepseek-v4-pro"
+AVAILABLE_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
 MAX_CONTEXT_TOKENS = 160000
 MAX_TOKENS = 50000
 MAX_HISTORY_MESSAGES = 20  # cap on accumulated user/assistant messages (excluding system)
@@ -18,12 +19,13 @@ def trim_history(history: list) -> list:
     return history[-MAX_HISTORY_MESSAGES:]
 
 
-def chat(api_key: str, messages: list, temperature: float = 0.7, response_format=None):
+def chat(api_key: str, messages: list, temperature: float = 0.7, response_format=None, model: str = None):
     if not api_key:
         raise ValueError("DeepSeek API 키가 필요합니다.")
 
+    model = model or MODEL
     payload = {
-        "model": MODEL,
+        "model": model,
         "messages": messages,
         "max_tokens": MAX_TOKENS,
         "temperature": temperature,
@@ -32,7 +34,7 @@ def chat(api_key: str, messages: list, temperature: float = 0.7, response_format
         payload["response_format"] = response_format
 
     started = time.time()
-    print(f"[deepseek] request: model={MODEL} messages={len(messages)} "
+    print(f"[deepseek] request: model={model} messages={len(messages)} "
           f"chars={sum(len(m['content']) for m in messages)}")
 
     try:
@@ -67,13 +69,14 @@ def chat(api_key: str, messages: list, temperature: float = 0.7, response_format
     return content
 
 
-def chat_stream(api_key: str, messages: list, temperature: float = 0.7, response_format=None):
+def chat_stream(api_key: str, messages: list, temperature: float = 0.7, response_format=None, model: str = None):
     """Yields the accumulated response text as it streams in from the API."""
     if not api_key:
         raise ValueError("DeepSeek API 키가 필요합니다.")
 
+    model = model or MODEL
     payload = {
-        "model": MODEL,
+        "model": model,
         "messages": messages,
         "max_tokens": MAX_TOKENS,
         "temperature": temperature,
@@ -83,7 +86,7 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7, response
         payload["response_format"] = response_format
 
     started = time.time()
-    print(f"[deepseek] stream request: model={MODEL} messages={len(messages)} "
+    print(f"[deepseek] stream request: model={model} messages={len(messages)} "
           f"chars={sum(len(m['content']) for m in messages)}")
 
     try:
