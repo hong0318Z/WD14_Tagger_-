@@ -395,11 +395,23 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     messages.append({"role": "user", "content": user_content})
 
     raw = ""
-    for raw in deepseek_client.chat_stream(
+    finish_reason = None
+    for raw, finish_reason in deepseek_client.chat_stream(
         api_key, messages, temperature=0.8,
     ):
         debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
         yield raw, "", "JSON 생성 중...", debug_info, history
+
+    if finish_reason == "length":
+        debug_info = (
+            "검색된 후보 태그:\n" + candidates_text
+            + f"\n\n--- AI 원본 응답 (JSON, {len(raw)}자) ---\n" + raw
+        )
+        yield raw, "", (
+            f"응답이 max_tokens({deepseek_client.MAX_TOKENS}) 한도에 도달해 중간에 잘렸습니다. "
+            f"씬 개수를 줄이거나 요청을 나눠서 다시 시도해주세요."
+        ), debug_info, history
+        return
 
     json_part = raw
 
@@ -438,7 +450,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         )},
     ]
     description_part = ""
-    for description_part in deepseek_client.chat_stream(api_key, desc_messages, temperature=0.5):
+    for description_part, _finish_reason in deepseek_client.chat_stream(api_key, desc_messages, temperature=0.5):
         debug_info = (
             "검색된 후보 태그:\n" + candidates_text
             + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw

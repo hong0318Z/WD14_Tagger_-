@@ -111,6 +111,7 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7, response
         )
 
     full = ""
+    finish_reason = None
     for line in resp.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
             continue
@@ -118,10 +119,14 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7, response
         if data_str.strip() == "[DONE]":
             break
         chunk = json.loads(data_str)
-        delta = chunk["choices"][0]["delta"].get("content", "")
+        choice = chunk["choices"][0]
+        delta = choice.get("delta", {}).get("content", "")
         if delta:
             full += delta
-            yield full
+            yield full, None
+        if choice.get("finish_reason"):
+            finish_reason = choice["finish_reason"]
 
     elapsed = time.time() - started
-    print(f"[deepseek] stream done: elapsed={elapsed:.1f}s chars={len(full)}")
+    print(f"[deepseek] stream done: elapsed={elapsed:.1f}s chars={len(full)} finish_reason={finish_reason}")
+    yield full, finish_reason
