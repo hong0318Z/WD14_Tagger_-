@@ -2,8 +2,17 @@ import json
 import requests
 
 API_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-chat"
-MAX_TOKENS = 4096
+MODEL = "deepseek-v4-pro"
+MAX_CONTEXT_TOKENS = 160000
+MAX_TOKENS = 16000
+MAX_HISTORY_MESSAGES = 20  # cap on accumulated user/assistant messages (excluding system)
+
+
+def trim_history(history: list) -> list:
+    """Keep only the most recent messages so accumulated context stays bounded."""
+    if not history:
+        return []
+    return history[-MAX_HISTORY_MESSAGES:]
 
 
 def chat(api_key: str, messages: list, temperature: float = 0.7, response_format=None):

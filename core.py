@@ -3,11 +3,8 @@ import os
 import shutil
 import time
 
-import gradio as gr
-
 import deepseek_client
 import local_config
-import presets as preset_store
 from exif_reader import read_image_metadata
 from tag_db import TagDB
 from wd14_tagger import predict
@@ -129,6 +126,13 @@ def tag_image(image, general_threshold, character_threshold, db: TagDB, filter_e
     return tag_string, "\n".join(detail_lines)
 
 
+def analyze_image_metadata(image_path):
+    if image_path is None:
+        return "이미지를 업로드해주세요.", ""
+    raw, prompt = read_image_metadata(image_path)
+    return raw, prompt
+
+
 # ---------------------------------------------------------------------------
 # Tab 2: natural language -> tag combination (2-step DeepSeek calls)
 # ---------------------------------------------------------------------------
@@ -168,6 +172,8 @@ you MAY add common, well-known danbooru/NovelAI tags for those even if they are 
 for added tags, use standard danbooru tag formatting (lowercase, underscores between words).
 - If multiple variants are requested, make them meaningfully different (different composition/pose/angle) \
 while staying consistent with the user's request.
+- If the conversation history contains earlier prompts, treat the new request as a refinement/follow-up \
+of that conversation (the user may be asking for a small change relative to the previous result).
 
 Respond ONLY with a JSON object of the form:
 {"variants": [{"tags": "{group1}, {group2}, ...", "explanation": "<설명을 한국어로 작성>"}, ...]}
@@ -175,13 +181,15 @@ The "tags" field must be in English, formatted per the grouping rules above (cur
 The "explanation" field must be written in Korean, briefly explaining the composition and why these tags were chosen."""
 
 
-def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int, standing_notes: str = ""):
+def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
+                        standing_notes: str = "", history: list = None, accumulate: bool = False):
+    history = history or []
     if not api_key:
-        return "", "DeepSeek API 키를 입력해주세요.", ""
+        return "", "DeepSeek API 키를 입력해주세요.", "", history
     if not user_request or not user_request.strip():
-        return "", "요청 내용을 입력해주세요.", ""
+        return "", "요청 내용을 입력해주세요.", "", history
     if db is None or len(db) == 0:
-        return "", "먼저 태그 DB(CSV)를 업로드해주세요.", ""
+        return "", "먼저 태그 DB(CSV)를 업로드해주세요.", "", history
 
     variant_count = max(1, min(int(variant_count or 1), 5))
 
@@ -223,10 +231,11 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int, sta
             f"\n\nSTANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
             f"they fix things the AI previously got wrong):\n{standing_notes.strip()}"
         )
-    step2_messages = [
-        {"role": "system", "content": FINAL_SYSTEM_PROMPT},
-        {"role": "user", "content": step2_user_content},
-    ]
+    step2_messages = [{"role": "system", "content": FINAL_SYSTEM_PROMPT}]
+    if accumulate:
+        step2_messages += deepseek_client.trim_history(history)
+    step2_messages.append({"role": "user", "content": step2_user_content})
+
     raw_final = deepseek_client.chat(
         api_key, step2_messages, temperature=0.8,
         response_format={"type": "json_object"},
@@ -247,8 +256,17 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int, sta
         tags_blocks.append(prefix + v.get("tags", ""))
         explanation_blocks.append(prefix + v.get("explanation", ""))
 
+    new_history = history
+    if accumulate:
+        new_history = deepseek_client.trim_history(
+            history + [
+                {"role": "user", "content": step2_user_content},
+                {"role": "assistant", "content": raw_final},
+            ]
+        )
+
     debug_info = "검색된 후보 태그:\n" + candidates_text
-    return "\n\n".join(tags_blocks), "\n\n".join(explanation_blocks), debug_info
+    return "\n\n".join(tags_blocks), "\n\n".join(explanation_blocks), debug_info, new_history
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +306,8 @@ the user provides (or sensible defaults if none given), and the number should re
 NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
 - Generate as many scenes as make sense for the user's description (each meaningful step/pose should be its own scene).
 - "id" and "createdAt" values must be plausible 13-digit millisecond timestamps, each scene with a distinct id.
+- If the conversation history contains an earlier series JSON, treat the new request as a revision/follow-up \
+of that series (the user may be asking to add, change, or extend scenes).
 
 OUTPUT FORMAT - respond with EXACTLY two sections, in this order, and nothing else:
 
@@ -300,11 +320,13 @@ OUTPUT FORMAT - respond with EXACTLY two sections, in this order, and nothing el
 Do not put any description text inside the JSON section. Do not add commentary outside these two sections."""
 
 
-def generate_multi_scene(api_key, description, char_def, db: TagDB, standing_notes: str = ""):
+def generate_multi_scene(api_key, description, char_def, db: TagDB,
+                          standing_notes: str = "", history: list = None, accumulate: bool = False):
+    history = history or []
     if not api_key:
-        return "", "", "DeepSeek API 키를 입력해주세요.", ""
+        return "", "", "DeepSeek API 키를 입력해주세요.", "", history
     if not description or not description.strip():
-        return "", "", "시리즈 설명을 입력해주세요.", ""
+        return "", "", "시리즈 설명을 입력해주세요.", "", history
 
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
     if db is not None and len(db) > 0:
@@ -345,10 +367,12 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB, standing_not
         f"since they are confirmed to exist):\n{candidates_text}\n\n"
     )
     user_content += f"Series description:\n{description}"
-    messages = [
-        {"role": "system", "content": MULTI_SCENE_SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
+
+    messages = [{"role": "system", "content": MULTI_SCENE_SYSTEM_PROMPT}]
+    if accumulate:
+        messages += deepseek_client.trim_history(history)
+    messages.append({"role": "user", "content": user_content})
+
     raw = deepseek_client.chat(api_key, messages, temperature=0.8)
 
     json_part = raw
@@ -359,12 +383,21 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB, standing_not
 
     debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 ---\n" + raw
 
+    new_history = history
+    if accumulate:
+        new_history = deepseek_client.trim_history(
+            history + [
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": raw},
+            ]
+        )
+
     try:
         parsed = json.loads(json_part)
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-        return pretty, description_part, "생성 완료", debug_info
+        return pretty, description_part, "생성 완료", debug_info, new_history
     except json.JSONDecodeError:
-        return json_part, description_part, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info
+        return json_part, description_part, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
 
 
 # ---------------------------------------------------------------------------
@@ -422,11 +455,12 @@ MODE_TRIGGERS = {
 }
 
 
-def generate_asset_output(api_key, mode_label, char_def, user_input):
+def generate_asset_output(api_key, mode_label, char_def, user_input, history: list = None, accumulate: bool = False):
+    history = history or []
     if not api_key:
-        return "DeepSeek API 키를 입력해주세요."
+        return "DeepSeek API 키를 입력해주세요.", history
     if not user_input or not user_input.strip():
-        return "내용을 입력해주세요."
+        return "내용을 입력해주세요.", history
 
     trigger = MODE_TRIGGERS[mode_label]
     user_content = trigger
@@ -434,180 +468,20 @@ def generate_asset_output(api_key, mode_label, char_def, user_input):
         user_content += f"\n\nCHARS: {char_def.strip()}"
     user_content += f"\n\n{user_input.strip()}"
 
-    messages = [
-        {"role": "system", "content": ASSET_SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
-    return deepseek_client.chat(api_key, messages, temperature=0.7)
+    messages = [{"role": "system", "content": ASSET_SYSTEM_PROMPT}]
+    if accumulate:
+        messages += deepseek_client.trim_history(history)
+    messages.append({"role": "user", "content": user_content})
 
+    result = deepseek_client.chat(api_key, messages, temperature=0.7)
 
-def analyze_image_metadata(image_path):
-    if image_path is None:
-        return "이미지를 업로드해주세요.", ""
-    raw, prompt = read_image_metadata(image_path)
-    return raw, prompt
-
-
-# ---------------------------------------------------------------------------
-# UI
-# ---------------------------------------------------------------------------
-
-with gr.Blocks(title="WD14 Tagger Toolkit") as demo:
-    gr.Markdown("# WD14 Tagger Toolkit")
-
-    db_state = gr.State(TagDB())
-
-    with gr.Accordion("설정", open=True):
-        deepseek_key = gr.Textbox(
-            label="DeepSeek API Key (서버에 저장됨, data/local_config.json)",
-            type="password",
-            placeholder="sk-...",
-        )
-        tag_db_file = gr.File(label="단부루 태그 CSV 업로드 (선택, 서버에 저장되어 재시작 후에도 유지됨)", file_types=[".csv"])
-        tag_db_status = gr.Markdown("태그 DB가 로드되지 않았습니다. (선택 사항)")
-        standing_notes = gr.Textbox(
-            label="고정 지시사항 / 메모 (탭2, 탭3 생성 시 항상 함께 전달됨, 서버에 저장되어 유지됨)",
-            placeholder="예: faceless male은 항상 얼굴 태그를 넣지 말 것. 배경은 항상 실내로.",
-            lines=4,
+    new_history = history
+    if accumulate:
+        new_history = deepseek_client.trim_history(
+            history + [
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": result},
+            ]
         )
 
-        demo.load(load_saved_state, inputs=None, outputs=[deepseek_key, db_state, tag_db_status, standing_notes])
-        deepseek_key.change(save_api_key, inputs=deepseek_key, outputs=None)
-        tag_db_file.change(load_tag_db, inputs=tag_db_file, outputs=[db_state, tag_db_status])
-        standing_notes.change(save_notes, inputs=standing_notes, outputs=None)
-
-    with gr.Tab("1. 이미지 태그 분석"):
-        with gr.Row():
-            with gr.Column():
-                image_input = gr.Image(type="pil", label="이미지 업로드")
-                general_threshold = gr.Slider(0, 1, value=0.35, label="General tag threshold")
-                character_threshold = gr.Slider(0, 1, value=0.85, label="Character tag threshold")
-                filter_existing = gr.Checkbox(
-                    label="업로드한 태그 DB에 존재하는 태그만 표시", value=False
-                )
-                tag_btn = gr.Button("태그 분석", variant="primary")
-            with gr.Column():
-                tag_output = gr.Textbox(label="태그 (복사해서 사용)", lines=4)
-                tag_detail = gr.Textbox(label="상세 결과 (확률 포함)", lines=15)
-
-        tag_btn.click(
-            tag_image,
-            inputs=[image_input, general_threshold, character_threshold, db_state, filter_existing],
-            outputs=[tag_output, tag_detail],
-        )
-
-    with gr.Tab("2. 태그 조합 생성"):
-        gr.Markdown("자연어로 원하는 이미지를 설명하면, 태그 DB에서 관련 태그를 찾아 AI가 조합해줍니다.")
-        combo_request = gr.Textbox(label="요청 내용 (한국어 가능)", lines=4)
-        combo_variant_count = gr.Slider(1, 5, value=1, step=1, label="생성 개수 (variants)")
-        combo_btn = gr.Button("태그 조합 생성", variant="primary")
-        combo_tags = gr.Textbox(label="결과 태그 (영어, {그룹} 단위로 구분됨, 복사해서 사용)", lines=6)
-        combo_explanation = gr.Textbox(label="설명 (한국어)", lines=4)
-        combo_debug = gr.Textbox(label="검색된 후보 태그 (디버그)", lines=10)
-
-        combo_btn.click(
-            generate_tag_combo,
-            inputs=[deepseek_key, combo_request, db_state, combo_variant_count, standing_notes],
-            outputs=[combo_tags, combo_explanation, combo_debug],
-        )
-
-        gr.Markdown("---\n#### 태그 프리셋 저장/불러오기")
-        with gr.Row():
-            preset_name = gr.Textbox(label="프리셋 이름", scale=2)
-            preset_save_btn = gr.Button("현재 결과 태그를 프리셋으로 저장", scale=1)
-        with gr.Row():
-            preset_dropdown = gr.Dropdown(
-                choices=list(preset_store.load_presets().keys()),
-                label="저장된 프리셋",
-                scale=2,
-            )
-            preset_load_btn = gr.Button("불러오기", scale=1)
-            preset_delete_btn = gr.Button("삭제", scale=1)
-        preset_status = gr.Markdown("")
-
-        def _save_preset(name, tags):
-            if not name or not name.strip():
-                return gr.update(), "프리셋 이름을 입력해주세요."
-            if not tags or not tags.strip():
-                return gr.update(), "저장할 태그가 없습니다."
-            new_presets = preset_store.save_preset(name, tags)
-            return gr.update(choices=list(new_presets.keys()), value=name.strip()), f"'{name.strip()}' 프리셋 저장 완료"
-
-        def _load_preset(name):
-            if not name:
-                return "", "프리셋을 선택해주세요."
-            presets = preset_store.load_presets()
-            return presets.get(name, ""), f"'{name}' 프리셋 불러옴"
-
-        def _delete_preset(name):
-            if not name:
-                return gr.update(), "삭제할 프리셋을 선택해주세요."
-            new_presets = preset_store.delete_preset(name)
-            return gr.update(choices=list(new_presets.keys()), value=None), f"'{name}' 프리셋 삭제됨"
-
-        preset_save_btn.click(
-            _save_preset, inputs=[preset_name, combo_tags], outputs=[preset_dropdown, preset_status]
-        )
-        preset_load_btn.click(
-            _load_preset, inputs=[preset_dropdown], outputs=[combo_tags, preset_status]
-        )
-        preset_delete_btn.click(
-            _delete_preset, inputs=[preset_dropdown], outputs=[preset_dropdown, preset_status]
-        )
-
-    with gr.Tab("3. 다중 씬(시리즈) 생성"):
-        gr.Markdown("시리즈에 대한 설명을 입력하면, NAIS 프리셋 JSON 형식으로 여러 씬의 프롬프트를 생성합니다.")
-        series_chars = gr.Textbox(
-            label="캐릭터/카테고리 정의 (선택, 예: a=Alice, b=Bob, 카테고리는 기본값 사용)", lines=1
-        )
-        series_description = gr.Textbox(label="시리즈 설명 (한국어)", lines=6)
-        series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
-        series_status = gr.Markdown("")
-        series_output = gr.Code(label="결과 JSON (NAI 프리셋에 그대로 붙여넣기)", language="json", lines=25)
-        series_descriptions = gr.Textbox(label="씬별 설명 (한국어, 별도 메모용)", lines=10)
-        series_debug = gr.Textbox(label="디버그 (검색된 후보 태그 / AI 원본 응답)", lines=15)
-
-        series_btn.click(
-            generate_multi_scene,
-            inputs=[deepseek_key, series_description, series_chars, db_state, standing_notes],
-            outputs=[series_output, series_descriptions, series_status, series_debug],
-        )
-
-    with gr.Tab("4. 에셋 시스템 / EXIF 분석"):
-        gr.Markdown("### 이미지 메타데이터(EXIF/PNG info) 분석")
-        with gr.Row():
-            with gr.Column():
-                exif_image = gr.Image(type="filepath", label="이미지 업로드 (원본 메타데이터 보존)")
-                exif_btn = gr.Button("메타데이터 분석")
-            with gr.Column():
-                exif_prompt = gr.Textbox(label="추출된 프롬프트 (있는 경우)", lines=4)
-                exif_raw = gr.Textbox(label="원본 메타데이터", lines=12)
-
-        exif_btn.click(
-            analyze_image_metadata,
-            inputs=[exif_image],
-            outputs=[exif_raw, exif_prompt],
-        )
-
-        gr.Markdown("---\n### 이미지 에셋 시스템 (파일명 정의 / NAI 프롬프트 생성 / 에셋 가이드)")
-        asset_mode = gr.Radio(
-            choices=list(MODE_TRIGGERS.keys()),
-            value=list(MODE_TRIGGERS.keys())[1],
-            label="모드 선택",
-        )
-        asset_chars = gr.Textbox(
-            label="캐릭터 정의 (선택, 예: a=Alice, b=Bob)", lines=1
-        )
-        asset_input = gr.Textbox(label="요청 내용 (한국어 가능)", lines=6)
-        asset_btn = gr.Button("생성", variant="primary")
-        asset_output = gr.Textbox(label="결과", lines=12)
-
-        asset_btn.click(
-            generate_asset_output,
-            inputs=[deepseek_key, asset_mode, asset_chars, asset_input],
-            outputs=[asset_output],
-        )
-
-
-if __name__ == "__main__":
-    demo.launch()
+    return result, new_history
