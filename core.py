@@ -193,6 +193,13 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
 
     variant_count = max(1, min(int(variant_count or 1), 5))
 
+    try:
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate)
+    except (RuntimeError, ValueError) as e:
+        return "", "", f"오류 발생: {e}", history
+
+
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate):
     # Step 1: ask DeepSeek for required concepts
     step1_user_content = user_request
     if standing_notes and standing_notes.strip():
@@ -328,6 +335,13 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
     if not description or not description.strip():
         return "", "", "시리즈 설명을 입력해주세요.", "", history
 
+    try:
+        return _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate)
+    except (RuntimeError, ValueError) as e:
+        return "", "", f"오류 발생: {e}", "", history
+
+
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate):
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
     if db is not None and len(db) > 0:
         # Step 1: ask DeepSeek for the visual concepts needed across all scenes
@@ -462,6 +476,13 @@ def generate_asset_output(api_key, mode_label, char_def, user_input, history: li
     if not user_input or not user_input.strip():
         return "내용을 입력해주세요.", history
 
+    try:
+        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate)
+    except (RuntimeError, ValueError) as e:
+        return f"오류 발생: {e}", history
+
+
+def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate):
     trigger = MODE_TRIGGERS[mode_label]
     user_content = trigger
     if char_def and char_def.strip():

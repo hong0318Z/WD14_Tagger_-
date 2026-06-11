@@ -1,4 +1,6 @@
 import json
+import time
+
 import requests
 
 API_URL = "https://api.deepseek.com/chat/completions"
@@ -6,6 +8,7 @@ MODEL = "deepseek-v4-pro"
 MAX_CONTEXT_TOKENS = 160000
 MAX_TOKENS = 16000
 MAX_HISTORY_MESSAGES = 20  # cap on accumulated user/assistant messages (excluding system)
+REQUEST_TIMEOUT = 90  # seconds
 
 
 def trim_history(history: list) -> list:
@@ -28,15 +31,37 @@ def chat(api_key: str, messages: list, temperature: float = 0.7, response_format
     if response_format:
         payload["response_format"] = response_format
 
-    resp = requests.post(
-        API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        data=json.dumps(payload),
-        timeout=120,
-    )
-    resp.raise_for_status()
+    started = time.time()
+    print(f"[deepseek] request: model={MODEL} messages={len(messages)} "
+          f"chars={sum(len(m['content']) for m in messages)}")
+
+    try:
+        resp = requests.post(
+            API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps(payload),
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.exceptions.Timeout as e:
+        elapsed = time.time() - started
+        raise RuntimeError(f"DeepSeek API 요청이 {elapsed:.0f}초 후 타임아웃되었습니다 (limit={REQUEST_TIMEOUT}s).") from e
+    except requests.exceptions.RequestException as e:
+        elapsed = time.time() - started
+        raise RuntimeError(f"DeepSeek API 요청 실패 ({elapsed:.0f}초 경과): {e}") from e
+
+    elapsed = time.time() - started
+    print(f"[deepseek] response: status={resp.status_code} elapsed={elapsed:.1f}s")
+
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"DeepSeek API 오류 (status={resp.status_code}, {elapsed:.1f}s): {resp.text[:1000]}"
+        )
+
     data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
+    print(f"[deepseek] usage: {usage}")
+    return content
