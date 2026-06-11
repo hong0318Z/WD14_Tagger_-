@@ -65,3 +65,63 @@ def chat(api_key: str, messages: list, temperature: float = 0.7, response_format
     usage = data.get("usage", {})
     print(f"[deepseek] usage: {usage}")
     return content
+
+
+def chat_stream(api_key: str, messages: list, temperature: float = 0.7, response_format=None):
+    """Yields the accumulated response text as it streams in from the API."""
+    if not api_key:
+        raise ValueError("DeepSeek API 키가 필요합니다.")
+
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "temperature": temperature,
+        "stream": True,
+    }
+    if response_format:
+        payload["response_format"] = response_format
+
+    started = time.time()
+    print(f"[deepseek] stream request: model={MODEL} messages={len(messages)} "
+          f"chars={sum(len(m['content']) for m in messages)}")
+
+    try:
+        resp = requests.post(
+            API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps(payload),
+            timeout=REQUEST_TIMEOUT,
+            stream=True,
+        )
+    except requests.exceptions.Timeout as e:
+        elapsed = time.time() - started
+        raise RuntimeError(f"DeepSeek API 요청이 {elapsed:.0f}초 후 타임아웃되었습니다 (limit={REQUEST_TIMEOUT}s).") from e
+    except requests.exceptions.RequestException as e:
+        elapsed = time.time() - started
+        raise RuntimeError(f"DeepSeek API 요청 실패 ({elapsed:.0f}초 경과): {e}") from e
+
+    if resp.status_code != 200:
+        elapsed = time.time() - started
+        raise RuntimeError(
+            f"DeepSeek API 오류 (status={resp.status_code}, {elapsed:.1f}s): {resp.text[:1000]}"
+        )
+
+    full = ""
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        data_str = line[len("data: "):]
+        if data_str.strip() == "[DONE]":
+            break
+        chunk = json.loads(data_str)
+        delta = chunk["choices"][0]["delta"].get("content", "")
+        if delta:
+            full += delta
+            yield full
+
+    elapsed = time.time() - started
+    print(f"[deepseek] stream done: elapsed={elapsed:.1f}s chars={len(full)}")

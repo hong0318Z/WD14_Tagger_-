@@ -65,12 +65,20 @@ class TagDB:
         query = query.strip().lower()
         if not query:
             return []
+        words = [w for w in query.split() if len(w) >= 3]
         results = []
         for entry in self.by_name.values():
             haystack = entry["name"].lower().replace("_", " ")
             in_keywords = any(query in k.lower() for k in entry["keywords"])
             in_desc = query in entry["description"].lower()
-            if query in haystack or in_keywords or in_desc:
+            match = query in haystack or in_keywords or in_desc
+            if not match and words:
+                match = any(
+                    w in haystack
+                    or any(w in k.lower() for k in entry["keywords"])
+                    for w in words
+                )
+            if match:
                 results.append(entry)
                 if len(results) >= limit:
                     break

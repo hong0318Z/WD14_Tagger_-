@@ -335,14 +335,17 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False):
     history = history or []
     if not api_key:
-        return "", "", "DeepSeek API 키를 입력해주세요.", "", history
+        yield "", "", "DeepSeek API 키를 입력해주세요.", "", history
+        return
     if not description or not description.strip():
-        return "", "", "시리즈 설명을 입력해주세요.", "", history
+        yield "", "", "시리즈 설명을 입력해주세요.", "", history
+        return
 
     try:
-        return _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate)
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate):
+            yield item
     except (RuntimeError, ValueError) as e:
-        return "", "", f"오류 발생: {e}", "", history
+        yield "", "", f"오류 발생: {e}", "", history
 
 
 def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate):
@@ -391,10 +394,13 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         messages += deepseek_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
 
-    raw = deepseek_client.chat(
+    raw = ""
+    for raw in deepseek_client.chat_stream(
         api_key, messages, temperature=0.8,
         response_format={"type": "json_object"},
-    )
+    ):
+        debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
+        yield raw, "", "JSON 생성 중...", debug_info, history
 
     json_part = raw
 
@@ -412,7 +418,10 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
     except json.JSONDecodeError:
         debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
-        return json_part, "", "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
+        yield json_part, "", "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
+        return
+
+    yield pretty, "", "씬별 설명 생성 중...", "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw, new_history
 
     # Step 4: ask DeepSeek for per-scene Korean descriptions, based on the generated JSON
     desc_messages = [
@@ -422,14 +431,21 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
             f"Generated preset JSON:\n{pretty}"
         )},
     ]
-    description_part = deepseek_client.chat(api_key, desc_messages, temperature=0.5)
+    description_part = ""
+    for description_part in deepseek_client.chat_stream(api_key, desc_messages, temperature=0.5):
+        debug_info = (
+            "검색된 후보 태그:\n" + candidates_text
+            + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
+            + "\n\n--- AI 원본 응답 (설명, 생성 중) ---\n" + description_part
+        )
+        yield pretty, description_part, "씬별 설명 생성 중...", debug_info, new_history
 
     debug_info = (
         "검색된 후보 태그:\n" + candidates_text
         + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
         + "\n\n--- AI 원본 응답 (설명) ---\n" + description_part
     )
-    return pretty, description_part, "생성 완료", debug_info, new_history
+    yield pretty, description_part, "생성 완료", debug_info, new_history
 
 
 # ---------------------------------------------------------------------------
