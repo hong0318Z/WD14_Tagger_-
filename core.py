@@ -316,15 +316,19 @@ NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
 - If the conversation history contains an earlier series JSON, treat the new request as a revision/follow-up \
 of that series (the user may be asking to add, change, or extend scenes).
 
-OUTPUT FORMAT - respond with EXACTLY two sections, in this order, and nothing else:
+OUTPUT FORMAT: respond with ONLY the JSON object described above, valid JSON, ready to be pasted directly \
+into the NAI preset tool. Do not add any commentary, explanation, or extra text before or after the JSON."""
 
-===JSON===
-<the JSON object described above, valid JSON, ready to be pasted directly into the NAI preset tool>
 
-===DESCRIPTIONS===
-<one line per scene, format: "[scene name]: [한국어로 이 씬이 어떤 장면인지 서술]">
+SCENE_DESCRIPTION_SYSTEM_PROMPT = """You are an assistant that writes short Korean descriptions for scenes \
+in a NAIS image-generation preset JSON.
+You will be given the series description (Korean) and the generated preset JSON (containing scene names \
+and scenePrompt tags).
+For EACH scene in the JSON, output one line in this exact format:
+[scene name]: [한국어로 이 씬이 어떤 장면인지 서술]
 
-Do not put any description text inside the JSON section. Do not add commentary outside these two sections."""
+Output ONLY these lines, one per scene, in the same order as the scenes appear in the JSON. \
+No extra commentary, no headers."""
 
 
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
@@ -387,15 +391,12 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         messages += deepseek_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
 
-    raw = deepseek_client.chat(api_key, messages, temperature=0.8)
+    raw = deepseek_client.chat(
+        api_key, messages, temperature=0.8,
+        response_format={"type": "json_object"},
+    )
 
     json_part = raw
-    description_part = ""
-    if "===JSON===" in raw and "===DESCRIPTIONS===" in raw:
-        json_part = raw.split("===JSON===", 1)[1].split("===DESCRIPTIONS===")[0].strip()
-        description_part = raw.split("===DESCRIPTIONS===", 1)[1].strip()
-
-    debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 ---\n" + raw
 
     new_history = history
     if accumulate:
@@ -409,9 +410,26 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     try:
         parsed = json.loads(json_part)
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-        return pretty, description_part, "생성 완료", debug_info, new_history
     except json.JSONDecodeError:
-        return json_part, description_part, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
+        debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
+        return json_part, "", "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
+
+    # Step 4: ask DeepSeek for per-scene Korean descriptions, based on the generated JSON
+    desc_messages = [
+        {"role": "system", "content": SCENE_DESCRIPTION_SYSTEM_PROMPT},
+        {"role": "user", "content": (
+            f"Series description:\n{description}\n\n"
+            f"Generated preset JSON:\n{pretty}"
+        )},
+    ]
+    description_part = deepseek_client.chat(api_key, desc_messages, temperature=0.5)
+
+    debug_info = (
+        "검색된 후보 태그:\n" + candidates_text
+        + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
+        + "\n\n--- AI 원본 응답 (설명) ---\n" + description_part
+    )
+    return pretty, description_part, "생성 완료", debug_info, new_history
 
 
 # ---------------------------------------------------------------------------
