@@ -4,6 +4,7 @@ import shutil
 import time
 
 import deepseek_client
+import llm_client
 import local_config
 from exif_reader import read_image_metadata
 from tag_db import TagDB
@@ -73,10 +74,10 @@ def load_tag_db(file_obj):
 
 
 def load_saved_state():
-    """Called on app startup: restore the DeepSeek API key, tag DB, and standing notes from disk."""
     cfg = local_config.load_config()
-    api_key = cfg.get("deepseek_api_key", "")
+    api_key = cfg.get("api_key", cfg.get("deepseek_api_key", ""))
     notes = cfg.get("standing_notes", "")
+    base_url = cfg.get("base_url", llm_client.DEFAULT_BASE_URL)
 
     db = TagDB()
     status = "태그 DB가 로드되지 않았습니다. (선택 사항)"
@@ -85,12 +86,16 @@ def load_saved_state():
         if count:
             status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
 
-    return api_key, db, status, notes
+    return api_key, db, status, notes, base_url
 
 
 def save_api_key(key):
-    local_config.save_config(deepseek_api_key=key or "")
+    local_config.save_config(api_key=key or "")
     return key
+
+
+def save_base_url(url):
+    local_config.save_config(base_url=url or llm_client.DEFAULT_BASE_URL)
 
 
 def save_notes(notes):
@@ -183,10 +188,8 @@ The "explanation" field must be written in Korean, briefly explaining the compos
 
 def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
                         standing_notes: str = "", history: list = None, accumulate: bool = False,
-                        model: str = None):
+                        model: str = None, base_url: str = None):
     history = history or []
-    if not api_key:
-        return "", "DeepSeek API 키를 입력해주세요.", "", history
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", "", history
     if db is None or len(db) == 0:
@@ -195,13 +198,13 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model)
-    except (RuntimeError, ValueError) as e:
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url)
+    except Exception as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model):
-    # Step 1: ask DeepSeek for required concepts
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url):
+    # Step 1: extract concepts
     step1_user_content = user_request
     if standing_notes and standing_notes.strip():
         step1_user_content += (
@@ -212,9 +215,9 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
         {"role": "user", "content": step1_user_content},
     ]
-    raw_concepts = deepseek_client.chat(
+    raw_concepts = llm_client.chat(
         api_key, step1_messages, temperature=0.5,
-        response_format={"type": "json_object"}, model=model,
+        response_format={"type": "json_object"}, model=model, base_url=base_url,
     )
     try:
         concepts = json.loads(raw_concepts).get("concepts", [])
@@ -244,9 +247,9 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         step2_messages += deepseek_client.trim_history(history)
     step2_messages.append({"role": "user", "content": step2_user_content})
 
-    raw_final = deepseek_client.chat(
+    raw_final = llm_client.chat(
         api_key, step2_messages, temperature=0.8,
-        response_format={"type": "json_object"}, model=model,
+        response_format={"type": "json_object"}, model=model, base_url=base_url,
     )
     try:
         final = json.loads(raw_final)
@@ -334,33 +337,29 @@ No extra commentary, no headers."""
 
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
-                          model: str = None):
+                          model: str = None, base_url: str = None):
     history = history or []
-    if not api_key:
-        yield "", "", "DeepSeek API 키를 입력해주세요.", "", history
-        return
     if not description or not description.strip():
         yield "", "", "시리즈 설명을 입력해주세요.", "", history
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url):
             yield item
-    except (RuntimeError, ValueError) as e:
+    except Exception as e:
         yield "", "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url):
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
     if db is not None and len(db) > 0:
-        # Step 1: ask DeepSeek for the visual concepts needed across all scenes
         concept_messages = [
             {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
             {"role": "user", "content": description},
         ]
-        raw_concepts = deepseek_client.chat(
+        raw_concepts = llm_client.chat(
             api_key, concept_messages, temperature=0.5,
-            response_format={"type": "json_object"}, model=model,
+            response_format={"type": "json_object"}, model=model, base_url=base_url,
         )
         try:
             concepts = json.loads(raw_concepts).get("concepts", [])
@@ -398,8 +397,8 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
 
     raw = ""
     finish_reason = None
-    for raw, finish_reason in deepseek_client.chat_stream(
-        api_key, messages, temperature=0.8, model=model,
+    for raw, finish_reason in llm_client.chat_stream(
+        api_key, messages, temperature=0.8, model=model, base_url=base_url,
     ):
         debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
         yield raw, "", "JSON 생성 중...", debug_info, history
@@ -452,7 +451,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         )},
     ]
     description_part = ""
-    for description_part, _finish_reason in deepseek_client.chat_stream(api_key, desc_messages, temperature=0.5, model=model):
+    for description_part, _finish_reason in llm_client.chat_stream(api_key, desc_messages, temperature=0.5, model=model, base_url=base_url):
         debug_info = (
             "검색된 후보 태그:\n" + candidates_text
             + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
@@ -524,20 +523,18 @@ MODE_TRIGGERS = {
 
 
 def generate_asset_output(api_key, mode_label, char_def, user_input, history: list = None, accumulate: bool = False,
-                           model: str = None):
+                           model: str = None, base_url: str = None):
     history = history or []
-    if not api_key:
-        return "DeepSeek API 키를 입력해주세요.", history
     if not user_input or not user_input.strip():
         return "내용을 입력해주세요.", history
 
     try:
-        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model)
-    except (RuntimeError, ValueError) as e:
+        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url)
+    except Exception as e:
         return f"오류 발생: {e}", history
 
 
-def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model):
+def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url):
     trigger = MODE_TRIGGERS[mode_label]
     user_content = trigger
     if char_def and char_def.strip():
@@ -546,10 +543,10 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
 
     messages = [{"role": "system", "content": ASSET_SYSTEM_PROMPT}]
     if accumulate:
-        messages += deepseek_client.trim_history(history)
+        messages += llm_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
 
-    result = deepseek_client.chat(api_key, messages, temperature=0.7, model=model)
+    result = llm_client.chat(api_key, messages, temperature=0.7, model=model, base_url=base_url)
 
     new_history = history
     if accumulate:
@@ -561,3 +558,54 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
         )
 
     return result, new_history
+
+
+# ---------------------------------------------------------------------------
+# Tab 4: Free-form chat / editing
+# ---------------------------------------------------------------------------
+
+CHAT_SYSTEM_PROMPT = """You are a helpful AI assistant for a NovelAI image generation workflow.
+Help the user discuss, refine, or generate image prompts, tags, and NAIS JSON presets.
+When producing prompts or tags, use English danbooru-style tags grouped in {} braces.
+When producing or editing NAIS JSON, follow the established schema exactly (id, name, scenes[]).
+All conversational replies and explanations should be in Korean unless the user asks otherwise."""
+
+
+def chat_with_context(api_key: str, base_url: str, model: str,
+                      user_message: str, base_content: str,
+                      standing_notes: str, history: list, accumulate: bool):
+    """Free-form chat with AI. Generator yielding (response_text, new_history)."""
+    if not user_message or not user_message.strip():
+        yield "메시지를 입력해주세요.", history
+        return
+
+    system_content = CHAT_SYSTEM_PROMPT
+    if standing_notes and standing_notes.strip():
+        system_content += f"\n\nSTANDING INSTRUCTIONS:\n{standing_notes.strip()}"
+
+    messages = [{"role": "system", "content": system_content}]
+    if accumulate:
+        messages += llm_client.trim_history(history)
+
+    user_content = user_message.strip()
+    if base_content and base_content.strip():
+        user_content = f"[베이스 콘텐츠]\n{base_content.strip()}\n\n[요청]\n{user_content}"
+
+    messages.append({"role": "user", "content": user_content})
+
+    try:
+        response = ""
+        for response, _ in llm_client.chat_stream(api_key, messages, temperature=0.7, model=model, base_url=base_url):
+            yield response, history
+
+        new_history = history
+        if accumulate:
+            new_history = llm_client.trim_history(
+                history + [
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": response},
+                ]
+            )
+        yield response, new_history
+    except Exception as e:
+        yield f"오류 발생: {e}", history
