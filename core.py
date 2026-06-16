@@ -221,11 +221,14 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
     ]
     raw_concepts = llm_client.chat(
         api_key, step1_messages, temperature=0.5,
-        response_format={"type": "json_object"}, model=model, base_url=base_url,
+        model=model, base_url=base_url,
     )
     try:
-        concepts = json.loads(raw_concepts).get("concepts", [])
-    except json.JSONDecodeError:
+        _raw = raw_concepts.strip()
+        if _raw.startswith("```"):
+            _raw = _raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        concepts = json.loads(_raw).get("concepts", [])
+    except (json.JSONDecodeError, Exception):
         concepts = [user_request]
 
     # Step 2: python looks up matching tags in the local tag DB
@@ -253,7 +256,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
 
     raw_final = llm_client.chat(
         api_key, step2_messages, temperature=0.8,
-        response_format={"type": "json_object"}, model=model, base_url=base_url,
+        model=model, base_url=base_url,
     )
     try:
         final = json.loads(raw_final)
@@ -363,11 +366,14 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         ]
         raw_concepts = llm_client.chat(
             api_key, concept_messages, temperature=0.5,
-            response_format={"type": "json_object"}, model=model, base_url=base_url,
+            model=model, base_url=base_url,
         )
         try:
-            concepts = json.loads(raw_concepts).get("concepts", [])
-        except json.JSONDecodeError:
+            _raw = raw_concepts.strip()
+            if _raw.startswith("```"):
+                _raw = _raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            concepts = json.loads(_raw).get("concepts", [])
+        except Exception:
             concepts = [description]
 
         # Step 2: python looks up matching tags in the local tag DB
