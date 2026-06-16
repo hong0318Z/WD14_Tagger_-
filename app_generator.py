@@ -9,13 +9,19 @@ import llm_client
 import presets as preset_store
 from tag_db import TagDB
 
-with gr.Blocks(title="Local LLM Prompt Generator") as demo:
-    gr.Markdown("# Local LLM Prompt Generator")
+with gr.Blocks(title="Prompt Generator") as demo:
+    gr.Markdown("# Prompt Generator")
 
     db_state = gr.State(TagDB())
     history_state = gr.State([])
 
     with gr.Accordion("⚙️ 설정", open=True):
+        # Provider
+        provider_radio = gr.Radio(
+            choices=list(llm_client.PROVIDERS.keys()),
+            value=list(llm_client.PROVIDERS.keys())[0],
+            label="프로바이더",
+        )
         with gr.Row():
             api_key = gr.Textbox(
                 label="API Key (로컬 서버는 빈값 가능, 저장됨)",
@@ -26,7 +32,6 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
             base_url = gr.Textbox(
                 label="서버 URL",
                 value=llm_client.DEFAULT_BASE_URL,
-                placeholder="http://192.168.0.116:8000/v1",
                 scale=3,
             )
             model_select = gr.Dropdown(
@@ -36,6 +41,18 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
                 allow_custom_value=True,
                 scale=2,
             )
+
+        def _on_provider_change(provider):
+            info = llm_client.PROVIDERS[provider]
+            models = info["models"]
+            return info["base_url"], gr.update(choices=models, value=models[0])
+
+        provider_radio.change(
+            _on_provider_change,
+            inputs=provider_radio,
+            outputs=[base_url, model_select],
+        )
+
         with gr.Row():
             tag_db_file = gr.File(
                 label="단부루 태그 CSV (선택, 저장됨)", file_types=[".csv"], scale=3
@@ -44,6 +61,11 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
         standing_notes = gr.Textbox(
             label="고정 지시사항 (모든 생성에 포함, 저장됨)",
             placeholder="예: faceless male은 얼굴 태그 제외. 배경 항상 실내.",
+            lines=3,
+        )
+        extra_system_prompt = gr.Textbox(
+            label="추가 시스템 프롬프트 (모든 AI 호출의 시스템 메시지 끝에 추가됨, 저장됨)",
+            placeholder="예: 항상 태그를 50개 이상 출력할 것. 배경 태그는 반드시 포함.",
             lines=3,
         )
         with gr.Row():
@@ -56,12 +78,13 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
         demo.load(
             core.load_saved_state,
             inputs=None,
-            outputs=[api_key, db_state, tag_db_status, standing_notes, base_url],
+            outputs=[api_key, db_state, tag_db_status, standing_notes, base_url, extra_system_prompt],
         )
         api_key.change(core.save_api_key, inputs=api_key)
         base_url.change(core.save_base_url, inputs=base_url)
         tag_db_file.change(core.load_tag_db, inputs=tag_db_file, outputs=[db_state, tag_db_status])
         standing_notes.change(core.save_notes, inputs=standing_notes)
+        extra_system_prompt.change(core.save_extra_system_prompt, inputs=extra_system_prompt)
 
         def _clear_history():
             return [], "대화 기록 초기화됨"
@@ -84,7 +107,7 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
         combo_btn.click(
             core.generate_tag_combo,
             inputs=[api_key, combo_request, db_state, combo_variant_count, standing_notes,
-                    history_state, accumulate_context, model_select, base_url],
+                    history_state, accumulate_context, model_select, base_url, extra_system_prompt],
             outputs=[combo_tags, combo_explanation, combo_debug, history_state],
         )
 
@@ -138,7 +161,7 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
         series_btn.click(
             core.generate_multi_scene,
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
-                    history_state, accumulate_context, model_select, base_url],
+                    history_state, accumulate_context, model_select, base_url, extra_system_prompt],
             outputs=[series_output, series_descriptions, series_status, series_debug, history_state],
         )
 
@@ -156,7 +179,7 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
         asset_btn.click(
             core.generate_asset_output,
             inputs=[api_key, asset_mode, asset_chars, asset_input, history_state, accumulate_context,
-                    model_select, base_url],
+                    model_select, base_url, extra_system_prompt],
             outputs=[asset_output, history_state],
         )
 
@@ -187,7 +210,7 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
         chat_response = gr.Textbox(label="최근 AI 응답 (복사용)", lines=8)
 
         def _chat_send(api_key_val, base_url_val, model_val, user_msg, base_cont,
-                       notes_val, chatbot_history, history_val, accumulate_val):
+                       notes_val, extra_prompt_val, chatbot_history, history_val, accumulate_val):
             if not user_msg or not user_msg.strip():
                 yield chatbot_history, "", history_val
                 return
@@ -199,7 +222,7 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
             new_history = history_val
             for response, new_history in core.chat_with_context(
                 api_key_val, base_url_val, model_val, user_msg, base_cont,
-                notes_val, history_val, accumulate_val,
+                notes_val, history_val, accumulate_val, extra_prompt_val,
             ):
                 display = list(new_display) + [{"role": "assistant", "content": response}]
                 yield display, response, new_history
@@ -207,14 +230,14 @@ with gr.Blocks(title="Local LLM Prompt Generator") as demo:
         chat_send_btn.click(
             _chat_send,
             inputs=[api_key, base_url, model_select, chat_input, base_content,
-                    standing_notes, chat_display, history_state, accumulate_context],
+                    standing_notes, extra_system_prompt, chat_display, history_state, accumulate_context],
             outputs=[chat_display, chat_response, history_state],
         ).then(lambda: "", outputs=chat_input)
 
         chat_input.submit(
             _chat_send,
             inputs=[api_key, base_url, model_select, chat_input, base_content,
-                    standing_notes, chat_display, history_state, accumulate_context],
+                    standing_notes, extra_system_prompt, chat_display, history_state, accumulate_context],
             outputs=[chat_display, chat_response, history_state],
         ).then(lambda: "", outputs=chat_input)
 

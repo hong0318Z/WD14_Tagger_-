@@ -9,6 +9,15 @@ AVAILABLE_MODELS = [
     "gpt-oss-20b-MXFP4-Q8",
 ]
 DEFAULT_MODEL = AVAILABLE_MODELS[0]
+
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
+
+PROVIDERS = {
+    "로컬 서버 (OpenAI 호환)": {"base_url": DEFAULT_BASE_URL, "models": AVAILABLE_MODELS},
+    "DeepSeek API": {"base_url": DEEPSEEK_BASE_URL, "models": DEEPSEEK_MODELS},
+}
+
 MAX_TOKENS = 32768
 MAX_HISTORY_MESSAGES = 20
 REQUEST_TIMEOUT = 300

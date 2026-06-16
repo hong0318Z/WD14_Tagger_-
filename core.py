@@ -80,6 +80,7 @@ def load_saved_state():
     api_key = cfg.get("api_key", cfg.get("deepseek_api_key", ""))
     notes = cfg.get("standing_notes", "")
     base_url = cfg.get("base_url", llm_client.DEFAULT_BASE_URL)
+    extra_prompt = cfg.get("extra_system_prompt", "")
 
     db = TagDB()
     status = "태그 DB가 로드되지 않았습니다. (선택 사항)"
@@ -88,12 +89,16 @@ def load_saved_state():
         if count:
             status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
 
-    return api_key, db, status, notes, base_url
+    return api_key, db, status, notes, base_url, extra_prompt
 
 
 def save_api_key(key):
     local_config.save_config(api_key=key or "")
     return key
+
+
+def save_extra_system_prompt(prompt):
+    local_config.save_config(extra_system_prompt=prompt or "")
 
 
 def save_base_url(url):
@@ -144,6 +149,11 @@ def analyze_image_metadata(image_path):
 
 # ---------------------------------------------------------------------------
 # Tab 2: natural language -> tag combination (2-step DeepSeek calls)
+def _sys(base: str, extra: str = "") -> str:
+    """Append extra system prompt if provided."""
+    return base + (f"\n\n---\nADDITIONAL INSTRUCTIONS:\n{extra.strip()}" if extra and extra.strip() else "")
+
+
 # ---------------------------------------------------------------------------
 
 CONCEPT_SYSTEM_PROMPT = """You are an assistant that breaks down an image generation request \
@@ -192,7 +202,7 @@ The "explanation" field must be written in Korean, briefly explaining the compos
 
 def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
                         standing_notes: str = "", history: list = None, accumulate: bool = False,
-                        model: str = None, base_url: str = None):
+                        model: str = None, base_url: str = None, extra_system_prompt: str = ""):
     history = history or []
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", "", history
@@ -202,12 +212,12 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url)
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt)
     except Exception as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url):
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt=""):
     # Step 1: extract concepts
     step1_user_content = user_request
     if standing_notes and standing_notes.strip():
@@ -249,9 +259,9 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
             f"\n\nSTANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
             f"they fix things the AI previously got wrong):\n{standing_notes.strip()}"
         )
-    step2_messages = [{"role": "system", "content": FINAL_SYSTEM_PROMPT}]
+    step2_messages = [{"role": "system", "content": _sys(FINAL_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
-        step2_messages += deepseek_client.trim_history(history)
+        step2_messages += llm_client.trim_history(history)
     step2_messages.append({"role": "user", "content": step2_user_content})
 
     raw_final = llm_client.chat(
@@ -276,7 +286,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
 
     new_history = history
     if accumulate:
-        new_history = deepseek_client.trim_history(
+        new_history = llm_client.trim_history(
             history + [
                 {"role": "user", "content": step2_user_content},
                 {"role": "assistant", "content": raw_final},
@@ -344,20 +354,20 @@ No extra commentary, no headers."""
 
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
-                          model: str = None, base_url: str = None):
+                          model: str = None, base_url: str = None, extra_system_prompt: str = ""):
     history = history or []
     if not description or not description.strip():
         yield "", "", "시리즈 설명을 입력해주세요.", "", history
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt):
             yield item
     except Exception as e:
         yield "", "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt=""):
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
     if db is not None and len(db) > 0:
         concept_messages = [
@@ -400,9 +410,9 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     )
     user_content += f"Series description:\n{description}"
 
-    messages = [{"role": "system", "content": MULTI_SCENE_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _sys(MULTI_SCENE_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
-        messages += deepseek_client.trim_history(history)
+        messages += llm_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
 
     raw = ""
@@ -419,7 +429,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
             + f"\n\n--- AI 원본 응답 (JSON, {len(raw)}자) ---\n" + raw
         )
         yield raw, "", (
-            f"응답이 max_tokens({deepseek_client.MAX_TOKENS}) 한도에 도달해 중간에 잘렸습니다. "
+            f"응답이 max_tokens({llm_client.MAX_TOKENS}) 한도에 도달해 중간에 잘렸습니다. "
             f"씬 개수를 줄이거나 요청을 나눠서 다시 시도해주세요."
         ), debug_info, history
         return
@@ -428,7 +438,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
 
     new_history = history
     if accumulate:
-        new_history = deepseek_client.trim_history(
+        new_history = llm_client.trim_history(
             history + [
                 {"role": "user", "content": user_content},
                 {"role": "assistant", "content": raw},
@@ -533,25 +543,25 @@ MODE_TRIGGERS = {
 
 
 def generate_asset_output(api_key, mode_label, char_def, user_input, history: list = None, accumulate: bool = False,
-                           model: str = None, base_url: str = None):
+                           model: str = None, base_url: str = None, extra_system_prompt: str = ""):
     history = history or []
     if not user_input or not user_input.strip():
         return "내용을 입력해주세요.", history
 
     try:
-        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url)
+        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt)
     except Exception as e:
         return f"오류 발생: {e}", history
 
 
-def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url):
+def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt=""):
     trigger = MODE_TRIGGERS[mode_label]
     user_content = trigger
     if char_def and char_def.strip():
         user_content += f"\n\nCHARS: {char_def.strip()}"
     user_content += f"\n\n{user_input.strip()}"
 
-    messages = [{"role": "system", "content": ASSET_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _sys(ASSET_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
         messages += llm_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
@@ -560,7 +570,7 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
 
     new_history = history
     if accumulate:
-        new_history = deepseek_client.trim_history(
+        new_history = llm_client.trim_history(
             history + [
                 {"role": "user", "content": user_content},
                 {"role": "assistant", "content": result},
@@ -583,13 +593,14 @@ All conversational replies and explanations should be in Korean unless the user 
 
 def chat_with_context(api_key: str, base_url: str, model: str,
                       user_message: str, base_content: str,
-                      standing_notes: str, history: list, accumulate: bool):
+                      standing_notes: str, history: list, accumulate: bool,
+                      extra_system_prompt: str = ""):
     """Free-form chat with AI. Generator yielding (response_text, new_history)."""
     if not user_message or not user_message.strip():
         yield "메시지를 입력해주세요.", history
         return
 
-    system_content = CHAT_SYSTEM_PROMPT
+    system_content = _sys(CHAT_SYSTEM_PROMPT, extra_system_prompt)
     if standing_notes and standing_notes.strip():
         system_content += f"\n\nSTANDING INSTRUCTIONS:\n{standing_notes.strip()}"
 
