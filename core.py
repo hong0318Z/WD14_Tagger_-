@@ -3,7 +3,6 @@ import os
 import shutil
 import time
 
-import deepseek_client
 import llm_client
 import local_config
 from exif_reader import read_image_metadata
