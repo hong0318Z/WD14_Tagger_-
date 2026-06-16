@@ -5,9 +5,12 @@ import time
 
 import llm_client
 import local_config
-from exif_reader import read_image_metadata
 from tag_db import TagDB
-from wd14_tagger import predict
+
+def _lazy_import_tagger():
+    from wd14_tagger import predict as _predict
+    from exif_reader import read_image_metadata as _read_exif
+    return _predict, _read_exif
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 SAVED_TAG_DB_PATH = os.path.join(DATA_DIR, "tag_db.csv")
@@ -110,6 +113,7 @@ def tag_image(image, general_threshold, character_threshold, db: TagDB, filter_e
     if image is None:
         return "이미지를 업로드해주세요.", ""
 
+    predict, _ = _lazy_import_tagger()
     general, character, rating = predict(image, general_threshold, character_threshold)
 
     if filter_existing and db is not None and len(db) > 0:
@@ -133,6 +137,7 @@ def tag_image(image, general_threshold, character_threshold, db: TagDB, filter_e
 def analyze_image_metadata(image_path):
     if image_path is None:
         return "이미지를 업로드해주세요.", ""
+    _, read_image_metadata = _lazy_import_tagger()
     raw, prompt = read_image_metadata(image_path)
     return raw, prompt
 
