@@ -3,6 +3,8 @@ import os
 import shutil
 import time
 
+import gradio as gr
+
 import llm_client
 import local_config
 from tag_db import TagDB
@@ -14,6 +16,19 @@ def _lazy_import_tagger():
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 SAVED_TAG_DB_PATH = os.path.join(DATA_DIR, "tag_db.csv")
+DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
+
+
+def prepare_json_download(json_text):
+    """Write generated JSON text to a temp file so it can be offered via DownloadButton."""
+    if not json_text or not json_text.strip():
+        return gr.update(visible=False)
+
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    path = os.path.join(DOWNLOAD_DIR, f"nais_preset_{int(time.time() * 1000)}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json_text)
+    return gr.update(value=path, visible=True)
 
 EXAMPLE_PRESET = {
     "id": "<timestamp_ms>",

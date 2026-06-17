@@ -155,6 +155,7 @@ with gr.Blocks(title="Prompt Generator") as demo:
         series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
         series_status = gr.Markdown("")
         series_output = gr.Code(label="결과 JSON (NAI 프리셋에 붙여넣기)", language="json", lines=25)
+        series_download = gr.DownloadButton(label="JSON 파일 다운로드", visible=False)
         series_descriptions = gr.Textbox(label="씬별 설명 (한국어)", lines=10)
         series_debug = gr.Textbox(label="디버그 (후보 태그 / AI 원본 응답)", lines=15)
 
@@ -163,6 +164,10 @@ with gr.Blocks(title="Prompt Generator") as demo:
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt],
             outputs=[series_output, series_descriptions, series_status, series_debug, history_state],
+        ).then(
+            core.prepare_json_download,
+            inputs=[series_output],
+            outputs=[series_download],
         )
 
     with gr.Tab("3. 이미지 에셋 시스템"):
@@ -251,11 +256,16 @@ with gr.Blocks(title="Prompt Generator") as demo:
         merge_btn = gr.Button("통합", variant="primary")
         merge_status = gr.Markdown("")
         merge_output = gr.Code(label="통합된 JSON", language="json", lines=25)
+        merge_download = gr.DownloadButton(label="JSON 파일 다운로드", visible=False)
 
         merge_btn.click(
             core.merge_json_presets,
             inputs=[merge_files, merge_name],
             outputs=[merge_output, merge_status],
+        ).then(
+            core.prepare_json_download,
+            inputs=[merge_output],
+            outputs=[merge_download],
         )
 
 
