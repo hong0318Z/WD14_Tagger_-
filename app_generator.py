@@ -244,6 +244,20 @@ with gr.Blocks(title="Prompt Generator") as demo:
         chat_clear_btn.click(lambda: ([], ""), outputs=[chat_display, chat_response])
         clear_base_btn.click(lambda: "", outputs=base_content)
 
+    with gr.Tab("5. JSON 통합"):
+        gr.Markdown("NAIS 프리셋 JSON 여러 개를 업로드하면 씬들을 하나의 프리셋으로 합쳐줍니다. (AI 호출 없음)")
+        merge_files = gr.File(label="통합할 JSON 파일들", file_count="multiple", file_types=[".json"])
+        merge_name = gr.Textbox(label="통합 결과 이름 (선택, 비우면 자동 생성)")
+        merge_btn = gr.Button("통합", variant="primary")
+        merge_status = gr.Markdown("")
+        merge_output = gr.Code(label="통합된 JSON", language="json", lines=25)
+
+        merge_btn.click(
+            core.merge_json_presets,
+            inputs=[merge_files, merge_name],
+            outputs=[merge_output, merge_status],
+        )
+
 
 if __name__ == "__main__":
     demo.launch(server_port=7861)

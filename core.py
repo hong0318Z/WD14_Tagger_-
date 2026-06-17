@@ -111,6 +111,75 @@ def save_notes(notes):
 
 
 # ---------------------------------------------------------------------------
+# JSON preset merge
+# ---------------------------------------------------------------------------
+
+def merge_json_presets(files, merged_name=None):
+    """Merge multiple uploaded NAIS preset JSON files into a single preset.
+
+    Each input file is expected to follow the schema:
+    {id, name, scenes: [{id, name, scenePrompt, queueCount, images, createdAt, width, height}], createdAt}
+    """
+    if not files:
+        return "", "병합할 JSON 파일을 업로드해주세요."
+
+    merged_scenes = []
+    seen_names = {}
+    source_names = []
+    errors = []
+
+    for f in files:
+        path = f.name if hasattr(f, "name") else f
+        try:
+            with open(path, "r", encoding="utf-8") as fp:
+                data = json.load(fp)
+        except Exception as e:
+            errors.append(f"{os.path.basename(path)}: 읽기 실패 ({e})")
+            continue
+
+        if not isinstance(data, dict) or "scenes" not in data or not isinstance(data["scenes"], list):
+            errors.append(f"{os.path.basename(path)}: 'scenes' 배열이 없는 형식입니다.")
+            continue
+
+        source_names.append(data.get("name", os.path.basename(path)))
+
+        for scene in data["scenes"]:
+            scene = dict(scene)
+            base_name = scene.get("name", "scene")
+            name = base_name
+            count = seen_names.get(base_name, 0)
+            if count > 0:
+                name = f"{base_name}_{count + 1}"
+            seen_names[base_name] = count + 1
+
+            scene["name"] = name
+            scene["id"] = str(int(time.time() * 1000)) + f"{len(merged_scenes):04d}"
+            scene["createdAt"] = int(scene["id"])
+            merged_scenes.append(scene)
+
+    if not merged_scenes:
+        status = "병합할 유효한 씬이 없습니다."
+        if errors:
+            status += " " + " / ".join(errors)
+        return "", status
+
+    now_ms = int(time.time() * 1000)
+    name = merged_name.strip() if merged_name and merged_name.strip() else " + ".join(source_names)
+    merged = {
+        "id": str(now_ms),
+        "name": name,
+        "scenes": merged_scenes,
+        "createdAt": now_ms,
+    }
+
+    status = f"{len(files)}개 파일에서 씬 {len(merged_scenes)}개를 통합했습니다."
+    if errors:
+        status += " 일부 오류: " + " / ".join(errors)
+
+    return json.dumps(merged, ensure_ascii=False, indent=2), status
+
+
+# ---------------------------------------------------------------------------
 # Tab 1: image -> tags
 # ---------------------------------------------------------------------------
 
