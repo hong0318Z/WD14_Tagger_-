@@ -45,12 +45,14 @@ with gr.Blocks(title="Prompt Generator") as demo:
         def _on_provider_change(provider):
             info = llm_client.PROVIDERS[provider]
             models = info["models"]
-            return info["base_url"], gr.update(choices=models, value=models[0])
+            saved_key = core.get_api_key_for_provider(provider)
+            core.save_provider(provider)
+            return info["base_url"], gr.update(choices=models, value=models[0]), saved_key
 
         provider_radio.change(
             _on_provider_change,
             inputs=provider_radio,
-            outputs=[base_url, model_select],
+            outputs=[base_url, model_select, api_key],
         )
 
         with gr.Row():
@@ -78,9 +80,9 @@ with gr.Blocks(title="Prompt Generator") as demo:
         demo.load(
             core.load_saved_state,
             inputs=None,
-            outputs=[api_key, db_state, tag_db_status, standing_notes, base_url, extra_system_prompt],
+            outputs=[api_key, db_state, tag_db_status, standing_notes, base_url, extra_system_prompt, provider_radio],
         )
-        api_key.change(core.save_api_key, inputs=api_key)
+        api_key.change(core.save_api_key_for_provider, inputs=[api_key, provider_radio])
         base_url.change(core.save_base_url, inputs=base_url)
         tag_db_file.change(core.load_tag_db, inputs=tag_db_file, outputs=[db_state, tag_db_status])
         standing_notes.change(core.save_notes, inputs=standing_notes)

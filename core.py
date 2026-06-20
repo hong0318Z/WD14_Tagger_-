@@ -90,11 +90,29 @@ def load_tag_db(file_obj):
     return db, f"태그 DB 로드 완료: {count}개 태그"
 
 
+def get_api_key_for_provider(provider):
+    cfg = local_config.load_config()
+    return cfg.get("api_keys", {}).get(provider, "")
+
+
+def save_api_key_for_provider(key, provider):
+    cfg = local_config.load_config()
+    api_keys = cfg.get("api_keys", {})
+    api_keys[provider] = key or ""
+    local_config.save_config(api_keys=api_keys)
+    return key
+
+
+def save_provider(provider):
+    local_config.save_config(last_provider=provider or "")
+
+
 def load_saved_state():
     cfg = local_config.load_config()
-    api_key = cfg.get("api_key", cfg.get("deepseek_api_key", ""))
+    provider = cfg.get("last_provider") or next(iter(llm_client.PROVIDERS))
+    api_key = cfg.get("api_keys", {}).get(provider, "")
     notes = cfg.get("standing_notes", "")
-    base_url = cfg.get("base_url", llm_client.DEFAULT_BASE_URL)
+    base_url = cfg.get("base_url", llm_client.PROVIDERS[provider]["base_url"])
     extra_prompt = cfg.get("extra_system_prompt", "")
 
     db = TagDB()
@@ -104,12 +122,7 @@ def load_saved_state():
         if count:
             status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
 
-    return api_key, db, status, notes, base_url, extra_prompt
-
-
-def save_api_key(key):
-    local_config.save_config(api_key=key or "")
-    return key
+    return api_key, db, status, notes, base_url, extra_prompt, provider
 
 
 def save_extra_system_prompt(prompt):
