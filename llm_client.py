@@ -45,6 +45,19 @@ def _client(api_key: str, base_url: str) -> OpenAI:
     )
 
 
+def _log_usage(prefix: str, usage) -> None:
+    if not usage:
+        return
+    cached = None
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is not None:
+        cached = getattr(details, "cached_tokens", None)
+    if cached:
+        print(f"[llm] {prefix} usage={usage} cache_hit_tokens={cached}")
+    else:
+        print(f"[llm] {prefix} usage={usage}")
+
+
 def chat(api_key: str, messages: list, temperature: float = 0.7,
          model: str = None, base_url: str = None, response_format=None) -> str:
     model = model or DEFAULT_MODEL
@@ -57,7 +70,7 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
     resp = client.chat.completions.create(**kwargs)
     elapsed = time.time() - started
     content = resp.choices[0].message.content
-    print(f"[llm] done: elapsed={elapsed:.1f}s usage={resp.usage}")
+    _log_usage(f"done: elapsed={elapsed:.1f}s", resp.usage)
     return content
 
 
@@ -69,13 +82,18 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
     started = time.time()
     print(f"[llm] stream: model={model} messages={len(messages)} chars={sum(len(m['content']) for m in messages)}")
     kwargs = dict(model=model, messages=messages, max_tokens=MAX_TOKENS, temperature=temperature, stream=True)
+    if base_url and "generativelanguage.googleapis.com" in base_url:
+        kwargs["stream_options"] = {"include_usage": True}
     if response_format:
         kwargs["response_format"] = response_format
 
     full = ""
     finish_reason = None
+    usage = None
     with client.chat.completions.create(**kwargs) as stream:
         for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
@@ -87,5 +105,5 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
                 finish_reason = choice.finish_reason
 
     elapsed = time.time() - started
-    print(f"[llm] stream done: elapsed={elapsed:.1f}s chars={len(full)} finish_reason={finish_reason}")
+    _log_usage(f"stream done: elapsed={elapsed:.1f}s chars={len(full)} finish_reason={finish_reason}", usage)
     yield full, finish_reason
