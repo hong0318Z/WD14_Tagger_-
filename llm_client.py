@@ -58,8 +58,17 @@ def _log_usage(prefix: str, usage) -> None:
         print(f"[llm] {prefix} usage={usage}")
 
 
+def _usage_dict(usage, elapsed: float) -> dict:
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        "elapsed": elapsed,
+    }
+
+
 def chat(api_key: str, messages: list, temperature: float = 0.7,
-         model: str = None, base_url: str = None, response_format=None) -> str:
+         model: str = None, base_url: str = None, response_format=None) -> tuple:
+    """Returns (content, usage_dict) where usage_dict has prompt_tokens/completion_tokens/elapsed."""
     model = model or DEFAULT_MODEL
     client = _client(api_key, base_url)
     started = time.time()
@@ -71,26 +80,33 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
     elapsed = time.time() - started
     content = resp.choices[0].message.content
     _log_usage(f"done: elapsed={elapsed:.1f}s", resp.usage)
-    return content
+    return content, _usage_dict(resp.usage, elapsed)
 
 
 def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
                 model: str = None, base_url: str = None, response_format=None):
-    """Yields (accumulated_text, finish_reason). finish_reason is None for mid-stream yields."""
+    """Yields (accumulated_text, finish_reason, usage_dict).
+    usage_dict is None for mid-stream yields and populated only on the final yield."""
     model = model or DEFAULT_MODEL
     client = _client(api_key, base_url)
     started = time.time()
     print(f"[llm] stream: model={model} messages={len(messages)} chars={sum(len(m['content']) for m in messages)}")
-    kwargs = dict(model=model, messages=messages, max_tokens=MAX_TOKENS, temperature=temperature, stream=True)
-    if base_url and "generativelanguage.googleapis.com" in base_url:
-        kwargs["stream_options"] = {"include_usage": True}
+    kwargs = dict(model=model, messages=messages, max_tokens=MAX_TOKENS, temperature=temperature, stream=True,
+                  stream_options={"include_usage": True})
     if response_format:
         kwargs["response_format"] = response_format
 
     full = ""
     finish_reason = None
     usage = None
-    with client.chat.completions.create(**kwargs) as stream:
+    try:
+        stream_ctx = client.chat.completions.create(**kwargs)
+    except Exception:
+        # some local/OpenAI-compat servers reject stream_options entirely
+        kwargs.pop("stream_options", None)
+        stream_ctx = client.chat.completions.create(**kwargs)
+
+    with stream_ctx as stream:
         for chunk in stream:
             if getattr(chunk, "usage", None):
                 usage = chunk.usage
@@ -100,10 +116,10 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
             delta = choice.delta.content or ""
             if delta:
                 full += delta
-                yield full, None
+                yield full, None, None
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
 
     elapsed = time.time() - started
     _log_usage(f"stream done: elapsed={elapsed:.1f}s chars={len(full)} finish_reason={finish_reason}", usage)
-    yield full, finish_reason
+    yield full, finish_reason, _usage_dict(usage, elapsed)

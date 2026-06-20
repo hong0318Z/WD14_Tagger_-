@@ -251,6 +251,20 @@ def _sys(base: str, extra: str = "") -> str:
     return base + (f"\n\n---\nADDITIONAL INSTRUCTIONS:\n{extra.strip()}" if extra and extra.strip() else "")
 
 
+def _fmt_usage_log(steps: list) -> str:
+    """steps: list of (label, usage_dict_or_None). Returns a Korean log block for display."""
+    lines = ["", "─── 토큰/시간 로그 ───"]
+    for i, (label, usage) in enumerate(steps, start=1):
+        if usage:
+            lines.append(
+                f"{i}. {label} - 입력 {usage['prompt_tokens']} 출력 {usage['completion_tokens']} "
+                f"시간 {usage['elapsed']:.1f}s"
+            )
+        else:
+            lines.append(f"{i}. {label} - (호출 없음)")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 
 CONCEPT_SYSTEM_PROMPT = """You are an assistant that breaks down an image generation request \
@@ -326,7 +340,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
         {"role": "user", "content": step1_user_content},
     ]
-    raw_concepts = llm_client.chat(
+    raw_concepts, usage1 = llm_client.chat(
         api_key, step1_messages, temperature=0.5,
         model=model, base_url=base_url,
     )
@@ -361,7 +375,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         step2_messages += llm_client.trim_history(history)
     step2_messages.append({"role": "user", "content": step2_user_content})
 
-    raw_final = llm_client.chat(
+    raw_final, usage2 = llm_client.chat(
         api_key, step2_messages, temperature=0.8,
         model=model, base_url=base_url,
     )
@@ -391,6 +405,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         )
 
     debug_info = "검색된 후보 태그:\n" + candidates_text
+    debug_info += _fmt_usage_log([("CSV 검색(개념 추출)", usage1), ("태그 생성", usage2)])
     return "\n\n".join(tags_blocks), "\n\n".join(explanation_blocks), debug_info, new_history
 
 
@@ -466,12 +481,13 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
 
 def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt=""):
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
+    usage_concept = None
     if db is not None and len(db) > 0:
         concept_messages = [
             {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
             {"role": "user", "content": description},
         ]
-        raw_concepts = llm_client.chat(
+        raw_concepts, usage_concept = llm_client.chat(
             api_key, concept_messages, temperature=0.5,
             model=model, base_url=base_url,
         )
@@ -514,7 +530,8 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
 
     raw = ""
     finish_reason = None
-    for raw, finish_reason in llm_client.chat_stream(
+    usage_json = None
+    for raw, finish_reason, usage_json in llm_client.chat_stream(
         api_key, messages, temperature=0.8, model=model, base_url=base_url,
     ):
         debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
@@ -525,6 +542,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
             "검색된 후보 태그:\n" + candidates_text
             + f"\n\n--- AI 원본 응답 (JSON, {len(raw)}자) ---\n" + raw
         )
+        debug_info += _fmt_usage_log([("CSV 검색(개념 추출)", usage_concept), ("JSON 생성", usage_json)])
         yield raw, "", (
             f"응답이 max_tokens({llm_client.MAX_TOKENS}) 한도에 도달해 중간에 잘렸습니다. "
             f"씬 개수를 줄이거나 요청을 나눠서 다시 시도해주세요."
@@ -568,7 +586,8 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         )},
     ]
     description_part = ""
-    for description_part, _finish_reason in llm_client.chat_stream(api_key, desc_messages, temperature=0.5, model=model, base_url=base_url):
+    usage_desc = None
+    for description_part, _finish_reason, usage_desc in llm_client.chat_stream(api_key, desc_messages, temperature=0.5, model=model, base_url=base_url):
         debug_info = (
             "검색된 후보 태그:\n" + candidates_text
             + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
@@ -580,6 +599,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         "검색된 후보 태그:\n" + candidates_text
         + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
         + "\n\n--- AI 원본 응답 (설명) ---\n" + description_part
+        + _fmt_usage_log([("CSV 검색(개념 추출)", usage_concept), ("JSON 생성", usage_json), ("씬 설명 생성", usage_desc)])
     )
     yield pretty, description_part, "생성 완료", debug_info, new_history
 
@@ -663,7 +683,7 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
         messages += llm_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
 
-    result = llm_client.chat(api_key, messages, temperature=0.7, model=model, base_url=base_url)
+    result, usage = llm_client.chat(api_key, messages, temperature=0.7, model=model, base_url=base_url)
 
     new_history = history
     if accumulate:
@@ -674,7 +694,7 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
             ]
         )
 
-    return result, new_history
+    return result + _fmt_usage_log([("생성", usage)]), new_history
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +733,8 @@ def chat_with_context(api_key: str, base_url: str, model: str,
 
     try:
         response = ""
-        for response, _ in llm_client.chat_stream(api_key, messages, temperature=0.7, model=model, base_url=base_url):
+        usage = None
+        for response, _, usage in llm_client.chat_stream(api_key, messages, temperature=0.7, model=model, base_url=base_url):
             yield response, history
 
         new_history = history
@@ -724,6 +745,6 @@ def chat_with_context(api_key: str, base_url: str, model: str,
                     {"role": "assistant", "content": response},
                 ]
             )
-        yield response, new_history
+        yield response + _fmt_usage_log([("생성", usage)]), new_history
     except Exception as e:
         yield f"오류 발생: {e}", history
