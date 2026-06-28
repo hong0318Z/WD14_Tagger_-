@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gradio as gr
 
 import core
+import embedding_client
 import llm_client
 import presets as preset_store
 from tag_db import TagDB
@@ -60,6 +61,22 @@ with gr.Blocks(title="Prompt Generator") as demo:
                 label="단부루 태그 CSV (선택, 저장됨)", file_types=[".csv"], scale=3
             )
             tag_db_status = gr.Markdown("태그 DB 없음", scale=2)
+
+        gr.Markdown("##### 임베딩 (태그 DB 검색용, 항상 로컬 시스템으로 호출됨)")
+        with gr.Row():
+            embedding_base_url = gr.Textbox(
+                label="임베딩 서버 URL (저장됨)",
+                value=embedding_client.DEFAULT_EMBEDDING_BASE_URL,
+                scale=3,
+            )
+            embedding_model_select = gr.Dropdown(
+                label="임베딩 모델 (저장됨)",
+                choices=embedding_client.DEFAULT_EMBEDDING_MODELS,
+                value=embedding_client.DEFAULT_EMBEDDING_MODEL,
+                allow_custom_value=True,
+                scale=2,
+            )
+
         standing_notes = gr.Textbox(
             label="고정 지시사항 (모든 생성에 포함, 저장됨)",
             placeholder="예: faceless male은 얼굴 태그 제외. 배경 항상 실내.",
@@ -80,10 +97,13 @@ with gr.Blocks(title="Prompt Generator") as demo:
         demo.load(
             core.load_saved_state,
             inputs=None,
-            outputs=[api_key, db_state, tag_db_status, standing_notes, base_url, extra_system_prompt, provider_radio],
+            outputs=[api_key, db_state, tag_db_status, standing_notes, base_url, extra_system_prompt, provider_radio,
+                     embedding_base_url, embedding_model_select],
         )
         api_key.change(core.save_api_key_for_provider, inputs=[api_key, provider_radio])
         base_url.change(core.save_base_url, inputs=base_url)
+        embedding_base_url.change(core.save_embedding_base_url, inputs=embedding_base_url)
+        embedding_model_select.change(core.save_embedding_model, inputs=embedding_model_select)
         tag_db_file.change(core.load_tag_db, inputs=tag_db_file, outputs=[db_state, tag_db_status])
         standing_notes.change(core.save_notes, inputs=standing_notes)
         extra_system_prompt.change(core.save_extra_system_prompt, inputs=extra_system_prompt)
@@ -109,7 +129,8 @@ with gr.Blocks(title="Prompt Generator") as demo:
         combo_btn.click(
             core.generate_tag_combo,
             inputs=[api_key, combo_request, db_state, combo_variant_count, standing_notes,
-                    history_state, accumulate_context, model_select, base_url, extra_system_prompt],
+                    history_state, accumulate_context, model_select, base_url, extra_system_prompt,
+                    embedding_base_url, embedding_model_select],
             outputs=[combo_tags, combo_explanation, combo_debug, history_state],
         )
 
@@ -164,7 +185,8 @@ with gr.Blocks(title="Prompt Generator") as demo:
         series_btn.click(
             core.generate_multi_scene,
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
-                    history_state, accumulate_context, model_select, base_url, extra_system_prompt],
+                    history_state, accumulate_context, model_select, base_url, extra_system_prompt,
+                    embedding_base_url, embedding_model_select],
             outputs=[series_output, series_descriptions, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,

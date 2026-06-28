@@ -5,6 +5,7 @@ import time
 
 import gradio as gr
 
+import embedding_client
 import llm_client
 import local_config
 from tag_db import TagDB
@@ -107,6 +108,14 @@ def save_provider(provider):
     local_config.save_config(last_provider=provider or "")
 
 
+def save_embedding_base_url(url):
+    local_config.save_config(embedding_base_url=url or embedding_client.DEFAULT_EMBEDDING_BASE_URL)
+
+
+def save_embedding_model(model):
+    local_config.save_config(embedding_model=model or embedding_client.DEFAULT_EMBEDDING_MODEL)
+
+
 def load_saved_state():
     cfg = local_config.load_config()
     provider = cfg.get("last_provider") or next(iter(llm_client.PROVIDERS))
@@ -114,6 +123,8 @@ def load_saved_state():
     notes = cfg.get("standing_notes", "")
     base_url = cfg.get("base_url", llm_client.PROVIDERS[provider]["base_url"])
     extra_prompt = cfg.get("extra_system_prompt", "")
+    embedding_base_url = cfg.get("embedding_base_url", embedding_client.DEFAULT_EMBEDDING_BASE_URL)
+    embedding_model = cfg.get("embedding_model", embedding_client.DEFAULT_EMBEDDING_MODEL)
 
     db = TagDB()
     status = "태그 DB가 로드되지 않았습니다. (선택 사항)"
@@ -122,7 +133,17 @@ def load_saved_state():
         if count:
             status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
 
-    return api_key, db, status, notes, base_url, extra_prompt, provider
+    return api_key, db, status, notes, base_url, extra_prompt, provider, embedding_base_url, embedding_model
+
+
+def semantic_candidates(user_text, db, api_key, embedding_base_url, embedding_model, top_k=24):
+    """Embed user_text and return the top-k most similar tag entries from db, plus embed usage."""
+    names, vectors = embedding_client.get_or_build_tag_embeddings(db, api_key, embedding_base_url, embedding_model)
+    if not names:
+        return [], None
+    query_vec, usage = embedding_client.embed_texts(api_key, [user_text], embedding_model, embedding_base_url)
+    matches = embedding_client.top_k_similar(query_vec[0], names, vectors, k=top_k)
+    return [db.by_name[name] for name, _score in matches], usage
 
 
 def save_extra_system_prompt(prompt):
@@ -267,26 +288,6 @@ def _fmt_usage_log(steps: list) -> str:
 
 # ---------------------------------------------------------------------------
 
-CONCEPT_SYSTEM_PROMPT = """You are an assistant that breaks down an image generation request \
-into a list of concrete visual concepts that should be represented as danbooru-style tags.
-Read the user's request (it may be written in Korean) and output ONLY a JSON object of the form:
-{"concepts": ["concept1", "concept2", ...]}
-
-Cover ALL of the following aspects whenever relevant to the request, each as its own concept:
-- composition / camera angle / shot framing (e.g. "full body shot", "from above", "close-up", "dutch angle")
-- background / setting
-- number and type of characters present (e.g. "1girl", "1boy", "faceless male")
-- character physical features (body type, hair, skin, distinguishing features)
-- clothing / state of undress
-- pose / action / position
-- interaction between characters if any
-- facial expression and emotional state
-- lighting / atmosphere / effects (sweat, blush, tears, etc.)
-
-Produce at least 10-15 concepts in total so the final prompt can be rich and well composed. \
-Each concept should be a short English phrase describing ONE visual element. \
-Do not include any explanation, only the JSON."""
-
 FINAL_SYSTEM_PROMPT = """You are an assistant that builds final danbooru tag prompts for an image generation model (NovelAI style).
 You will receive the user's original request (possibly in Korean), a list of candidate tags \
 retrieved from a tag database (each with a Korean description), and a requested number of variants.
@@ -313,7 +314,8 @@ The "explanation" field must be written in Korean, briefly explaining the compos
 
 def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
                         standing_notes: str = "", history: list = None, accumulate: bool = False,
-                        model: str = None, base_url: str = None, extra_system_prompt: str = ""):
+                        model: str = None, base_url: str = None, extra_system_prompt: str = "",
+                        embedding_base_url: str = None, embedding_model: str = None):
     history = history or []
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", "", history
@@ -323,57 +325,42 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt)
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model)
     except Exception as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt=""):
-    # Step 1: extract concepts
-    step1_user_content = user_request
-    if standing_notes and standing_notes.strip():
-        step1_user_content += (
-            f"\n\nSTANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
-            f"they fix things the AI previously got wrong):\n{standing_notes.strip()}"
-        )
-    step1_messages = [
-        {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
-        {"role": "user", "content": step1_user_content},
-    ]
-    raw_concepts, usage1 = llm_client.chat(
-        api_key, step1_messages, temperature=0.5,
-        model=model, base_url=base_url,
-    )
-    try:
-        _raw = raw_concepts.strip()
-        if _raw.startswith("```"):
-            _raw = _raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        concepts = json.loads(_raw).get("concepts", [])
-    except (json.JSONDecodeError, Exception):
-        concepts = [user_request]
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None):
+    # Step 1: embedding-based semantic search for candidate tags (no LLM call)
+    embedding_base_url = embedding_base_url or embedding_client.DEFAULT_EMBEDDING_BASE_URL
+    embedding_model = embedding_model or embedding_client.DEFAULT_EMBEDDING_MODEL
+    embedding_api_key = get_api_key_for_provider("로컬 서버 (OpenAI 호환)")
 
-    # Step 2: python looks up matching tags in the local tag DB
-    candidates = db.candidates_for_terms(concepts, per_term_limit=8)
+    candidates, usage_embed = semantic_candidates(
+        user_request, db, embedding_api_key, embedding_base_url, embedding_model,
+        top_k=8 * variant_count + 16,
+    )
     candidate_lines = [
         f"{c['name']} : {c['description']}" for c in candidates
     ]
     candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
 
-    # Step 3: ask DeepSeek to compose the final tag prompt(s)
-    step2_user_content = (
+    # Step 2: single LLM call - request + matched candidate tags -> combine into final tags
+    step_user_content = (
         f"User request:\n{user_request}\n\n"
         f"Number of variants requested: {variant_count}\n\n"
-        f"Candidate tags from the database:\n{candidates_text}"
+        f"Matched candidate tags from the database (via embedding similarity search):\n{candidates_text}"
     )
     if standing_notes and standing_notes.strip():
-        step2_user_content += (
+        step_user_content += (
             f"\n\nSTANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
             f"they fix things the AI previously got wrong):\n{standing_notes.strip()}"
         )
     step2_messages = [{"role": "system", "content": _sys(FINAL_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
         step2_messages += llm_client.trim_history(history)
-    step2_messages.append({"role": "user", "content": step2_user_content})
+    step2_messages.append({"role": "user", "content": step_user_content})
+    step2_user_content = step_user_content
 
     raw_final, usage2 = llm_client.chat(
         api_key, step2_messages, temperature=0.8,
@@ -404,8 +391,8 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
             ]
         )
 
-    debug_info = "검색된 후보 태그:\n" + candidates_text
-    debug_info += _fmt_usage_log([("CSV 검색(개념 추출)", usage1), ("태그 생성", usage2)])
+    debug_info = "검색된 후보 태그(임베딩):\n" + candidates_text
+    debug_info += _fmt_usage_log([("임베딩 검색", usage_embed), ("태그 생성", usage2)])
     return "\n\n".join(tags_blocks), "\n\n".join(explanation_blocks), debug_info, new_history
 
 
@@ -466,41 +453,32 @@ No extra commentary, no headers."""
 
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
-                          model: str = None, base_url: str = None, extra_system_prompt: str = ""):
+                          model: str = None, base_url: str = None, extra_system_prompt: str = "",
+                          embedding_base_url: str = None, embedding_model: str = None):
     history = history or []
     if not description or not description.strip():
         yield "", "", "시리즈 설명을 입력해주세요.", "", history
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model):
             yield item
     except Exception as e:
         yield "", "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt=""):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None):
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
     usage_concept = None
     if db is not None and len(db) > 0:
-        concept_messages = [
-            {"role": "system", "content": CONCEPT_SYSTEM_PROMPT},
-            {"role": "user", "content": description},
-        ]
-        raw_concepts, usage_concept = llm_client.chat(
-            api_key, concept_messages, temperature=0.5,
-            model=model, base_url=base_url,
-        )
-        try:
-            _raw = raw_concepts.strip()
-            if _raw.startswith("```"):
-                _raw = _raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            concepts = json.loads(_raw).get("concepts", [])
-        except Exception:
-            concepts = [description]
+        # Step 1: embedding-based semantic search for candidate tags (no LLM call)
+        embedding_base_url = embedding_base_url or embedding_client.DEFAULT_EMBEDDING_BASE_URL
+        embedding_model = embedding_model or embedding_client.DEFAULT_EMBEDDING_MODEL
+        embedding_api_key = get_api_key_for_provider("로컬 서버 (OpenAI 호환)")
 
-        # Step 2: python looks up matching tags in the local tag DB
-        candidates = db.candidates_for_terms(concepts, per_term_limit=8)
+        candidates, usage_concept = semantic_candidates(
+            description, db, embedding_api_key, embedding_base_url, embedding_model, top_k=40,
+        )
         candidate_lines = [f"{c['name']} : {c['description']}" for c in candidates]
         candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
 
@@ -542,7 +520,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
             "검색된 후보 태그:\n" + candidates_text
             + f"\n\n--- AI 원본 응답 (JSON, {len(raw)}자) ---\n" + raw
         )
-        debug_info += _fmt_usage_log([("CSV 검색(개념 추출)", usage_concept), ("JSON 생성", usage_json)])
+        debug_info += _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json)])
         yield raw, "", (
             f"응답이 max_tokens({llm_client.MAX_TOKENS}) 한도에 도달해 중간에 잘렸습니다. "
             f"씬 개수를 줄이거나 요청을 나눠서 다시 시도해주세요."
@@ -599,7 +577,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         "검색된 후보 태그:\n" + candidates_text
         + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
         + "\n\n--- AI 원본 응답 (설명) ---\n" + description_part
-        + _fmt_usage_log([("CSV 검색(개념 추출)", usage_concept), ("JSON 생성", usage_json), ("씬 설명 생성", usage_desc)])
+        + _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json), ("씬 설명 생성", usage_desc)])
     )
     yield pretty, description_part, "생성 완료", debug_info, new_history
 
