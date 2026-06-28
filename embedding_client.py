@@ -27,6 +27,13 @@ def _client(api_key: str, base_url: str) -> OpenAI:
     )
 
 
+def list_models(api_key: str, base_url: str) -> list:
+    """Returns a list of model id strings available on the embedding server."""
+    client = _client(api_key, base_url)
+    resp = client.models.list()
+    return sorted(m.id for m in resp.data)
+
+
 def embed_texts(api_key: str, texts: list, model: str, base_url: str = None):
     """Returns (vectors: np.ndarray[N, D], usage_dict)."""
     model = model or DEFAULT_EMBEDDING_MODEL

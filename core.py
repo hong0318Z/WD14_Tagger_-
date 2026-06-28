@@ -116,6 +116,18 @@ def save_embedding_model(model):
     local_config.save_config(embedding_model=model or embedding_client.DEFAULT_EMBEDDING_MODEL)
 
 
+def save_embedding_api_key(key):
+    local_config.save_config(embedding_api_key=key or "")
+
+
+def list_embedding_models(api_key, base_url):
+    try:
+        models = embedding_client.list_models(api_key, base_url)
+        return gr.update(choices=models, value=models[0] if models else None), f"모델 {len(models)}개 조회됨"
+    except Exception as e:
+        return gr.update(), f"조회 실패: {e}"
+
+
 def load_saved_state():
     cfg = local_config.load_config()
     provider = cfg.get("last_provider") or next(iter(llm_client.PROVIDERS))
@@ -125,6 +137,7 @@ def load_saved_state():
     extra_prompt = cfg.get("extra_system_prompt", "")
     embedding_base_url = cfg.get("embedding_base_url", embedding_client.DEFAULT_EMBEDDING_BASE_URL)
     embedding_model = cfg.get("embedding_model", embedding_client.DEFAULT_EMBEDDING_MODEL)
+    embedding_api_key = cfg.get("embedding_api_key", "")
 
     db = TagDB()
     status = "태그 DB가 로드되지 않았습니다. (선택 사항)"
@@ -133,7 +146,8 @@ def load_saved_state():
         if count:
             status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
 
-    return api_key, db, status, notes, base_url, extra_prompt, provider, embedding_base_url, embedding_model
+    return (api_key, db, status, notes, base_url, extra_prompt, provider,
+            embedding_base_url, embedding_model, embedding_api_key)
 
 
 def semantic_candidates(user_text, db, api_key, embedding_base_url, embedding_model, top_k=24):
@@ -315,7 +329,8 @@ The "explanation" field must be written in Korean, briefly explaining the compos
 def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
                         standing_notes: str = "", history: list = None, accumulate: bool = False,
                         model: str = None, base_url: str = None, extra_system_prompt: str = "",
-                        embedding_base_url: str = None, embedding_model: str = None):
+                        embedding_base_url: str = None, embedding_model: str = None,
+                        embedding_api_key: str = None):
     history = history or []
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", "", history
@@ -325,16 +340,16 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model)
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key)
     except Exception as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None):
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None):
     # Step 1: embedding-based semantic search for candidate tags (no LLM call)
     embedding_base_url = embedding_base_url or embedding_client.DEFAULT_EMBEDDING_BASE_URL
     embedding_model = embedding_model or embedding_client.DEFAULT_EMBEDDING_MODEL
-    embedding_api_key = get_api_key_for_provider("로컬 서버 (OpenAI 호환)")
+    embedding_api_key = embedding_api_key or ""
 
     candidates, usage_embed = semantic_candidates(
         user_request, db, embedding_api_key, embedding_base_url, embedding_model,
@@ -454,27 +469,28 @@ No extra commentary, no headers."""
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
                           model: str = None, base_url: str = None, extra_system_prompt: str = "",
-                          embedding_base_url: str = None, embedding_model: str = None):
+                          embedding_base_url: str = None, embedding_model: str = None,
+                          embedding_api_key: str = None):
     history = history or []
     if not description or not description.strip():
         yield "", "", "시리즈 설명을 입력해주세요.", "", history
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key):
             yield item
     except Exception as e:
         yield "", "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None):
     candidates_text = "(태그 DB가 업로드되지 않았습니다)"
     usage_concept = None
     if db is not None and len(db) > 0:
         # Step 1: embedding-based semantic search for candidate tags (no LLM call)
         embedding_base_url = embedding_base_url or embedding_client.DEFAULT_EMBEDDING_BASE_URL
         embedding_model = embedding_model or embedding_client.DEFAULT_EMBEDDING_MODEL
-        embedding_api_key = get_api_key_for_provider("로컬 서버 (OpenAI 호환)")
+        embedding_api_key = embedding_api_key or ""
 
         candidates, usage_concept = semantic_candidates(
             description, db, embedding_api_key, embedding_base_url, embedding_model, top_k=40,
