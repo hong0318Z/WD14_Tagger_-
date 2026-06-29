@@ -151,13 +151,19 @@ def load_saved_state():
 
 
 def semantic_candidates(user_text, db, api_key, embedding_base_url, embedding_model, top_k=24):
-    """Embed user_text and return the top-k most similar tag entries from db, plus embed usage."""
+    """Embed user_text and return the top-k most similar tag entries from db (each with a
+    '_score' key holding cosine similarity), plus embed usage."""
     names, vectors = embedding_client.get_or_build_tag_embeddings(db, api_key, embedding_base_url, embedding_model)
     if not names:
         return [], None
     query_vec, usage = embedding_client.embed_texts(api_key, [user_text], embedding_model, embedding_base_url)
     matches = embedding_client.top_k_similar(query_vec[0], names, vectors, k=top_k)
-    return [db.by_name[name] for name, _score in matches], usage
+    results = []
+    for name, score in matches:
+        entry = dict(db.by_name[name])
+        entry["_score"] = score
+        results.append(entry)
+    return results, usage
 
 
 def save_extra_system_prompt(prompt):
@@ -359,6 +365,9 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         f"{c['name']} : {c['description']}" for c in candidates
     ]
     candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
+    candidates_debug_text = "\n".join(
+        f"[{c['_score']:.3f}] {c['name']} : {c['description']}" for c in candidates
+    ) if candidates else "(no candidates found)"
 
     # Step 2: single LLM call - request + matched candidate tags -> combine into final tags
     step_user_content = (
@@ -406,7 +415,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
             ]
         )
 
-    debug_info = "검색된 후보 태그(임베딩):\n" + candidates_text
+    debug_info = "검색된 후보 태그(임베딩, [유사도]):\n" + candidates_debug_text
     debug_info += _fmt_usage_log([("임베딩 검색", usage_embed), ("태그 생성", usage2)])
     return "\n\n".join(tags_blocks), "\n\n".join(explanation_blocks), debug_info, new_history
 
@@ -497,6 +506,11 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         )
         candidate_lines = [f"{c['name']} : {c['description']}" for c in candidates]
         candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
+        candidates_debug_text = "\n".join(
+            f"[{c['_score']:.3f}] {c['name']} : {c['description']}" for c in candidates
+        ) if candidates else "(no candidates found)"
+    else:
+        candidates_debug_text = candidates_text
 
     base_ts = int(time.time() * 1000)
     user_content = (
@@ -528,12 +542,12 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     for raw, finish_reason, usage_json in llm_client.chat_stream(
         api_key, messages, temperature=0.8, model=model, base_url=base_url,
     ):
-        debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
+        debug_info = "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
         yield raw, "", "JSON 생성 중...", debug_info, history
 
     if finish_reason == "length":
         debug_info = (
-            "검색된 후보 태그:\n" + candidates_text
+            "검색된 후보 태그([유사도]):\n" + candidates_debug_text
             + f"\n\n--- AI 원본 응답 (JSON, {len(raw)}자) ---\n" + raw
         )
         debug_info += _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json)])
@@ -565,11 +579,11 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         parsed = json.loads(json_part)
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
     except json.JSONDecodeError:
-        debug_info = "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
+        debug_info = "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
         yield json_part, "", "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
         return
 
-    yield pretty, "", "씬별 설명 생성 중...", "검색된 후보 태그:\n" + candidates_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw, new_history
+    yield pretty, "", "씬별 설명 생성 중...", "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw, new_history
 
     # Step 4: ask DeepSeek for per-scene Korean descriptions, based on the generated JSON
     desc_messages = [
@@ -583,14 +597,14 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     usage_desc = None
     for description_part, _finish_reason, usage_desc in llm_client.chat_stream(api_key, desc_messages, temperature=0.5, model=model, base_url=base_url):
         debug_info = (
-            "검색된 후보 태그:\n" + candidates_text
+            "검색된 후보 태그([유사도]):\n" + candidates_debug_text
             + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
             + "\n\n--- AI 원본 응답 (설명, 생성 중) ---\n" + description_part
         )
         yield pretty, description_part, "씬별 설명 생성 중...", debug_info, new_history
 
     debug_info = (
-        "검색된 후보 태그:\n" + candidates_text
+        "검색된 후보 태그([유사도]):\n" + candidates_debug_text
         + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
         + "\n\n--- AI 원본 응답 (설명) ---\n" + description_part
         + _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json), ("씬 설명 생성", usage_desc)])
