@@ -186,14 +186,13 @@ with gr.Blocks(title="Prompt Generator") as demo:
         preset_delete_btn.click(_delete_preset, inputs=[preset_dropdown], outputs=[preset_dropdown, preset_status])
 
     with gr.Tab("2. 다중 씬(시리즈) 생성"):
-        gr.Markdown("시리즈 설명 → NAIS 프리셋 JSON + 씬별 설명 (스트리밍)")
+        gr.Markdown("시리즈 설명 → NAIS 프리셋 JSON (스트리밍)")
         series_chars = gr.Textbox(label="캐릭터/카테고리 정의 (예: a=Alice, b=Bob)", lines=1)
         series_description = gr.Textbox(label="시리즈 설명 (한국어)", lines=6)
         series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
         series_status = gr.Markdown("")
         series_output = gr.Code(label="결과 JSON (NAI 프리셋에 붙여넣기)", language="json", lines=25)
         series_download = gr.DownloadButton(label="JSON 파일 다운로드", visible=False)
-        series_descriptions = gr.Textbox(label="씬별 설명 (한국어)", lines=10)
         series_debug = gr.Textbox(label="디버그 (후보 태그 / AI 원본 응답)", lines=15)
 
         series_btn.click(
@@ -201,7 +200,7 @@ with gr.Blocks(title="Prompt Generator") as demo:
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key],
-            outputs=[series_output, series_descriptions, series_status, series_debug, history_state],
+            outputs=[series_output, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,
             inputs=[series_output],

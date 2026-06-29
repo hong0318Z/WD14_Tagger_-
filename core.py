@@ -473,17 +473,6 @@ OUTPUT FORMAT: respond with ONLY the JSON object described above, valid JSON. Do
 explanation, or extra text before or after the JSON."""
 
 
-SCENE_DESCRIPTION_SYSTEM_PROMPT = """You are an assistant that writes short Korean descriptions for scenes \
-in a NAIS image-generation preset JSON.
-You will be given the series description (Korean) and the generated preset JSON (containing scene names \
-and scenePrompt tags).
-For EACH scene in the JSON, output one line in this exact format:
-[scene name]: [한국어로 이 씬이 어떤 장면인지 서술]
-
-Output ONLY these lines, one per scene, in the same order as the scenes appear in the JSON. \
-No extra commentary, no headers."""
-
-
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
                           model: str = None, base_url: str = None, extra_system_prompt: str = "",
@@ -491,14 +480,14 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           embedding_api_key: str = None):
     history = history or []
     if not description or not description.strip():
-        yield "", "", "시리즈 설명을 입력해주세요.", "", history
+        yield "", "시리즈 설명을 입력해주세요.", "", history
         return
 
     try:
         for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key):
             yield item
     except Exception as e:
-        yield "", "", f"오류 발생: {e}", "", history
+        yield "", f"오류 발생: {e}", "", history
 
 
 def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None):
@@ -550,7 +539,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         api_key, messages, temperature=0.8, model=model, base_url=base_url,
     ):
         debug_info = "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
-        yield raw, "", "JSON 생성 중...", debug_info, history
+        yield raw, "JSON 생성 중...", debug_info, history
 
     if finish_reason == "length":
         debug_info = (
@@ -558,7 +547,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
             + f"\n\n--- AI 원본 응답 (JSON, {len(raw)}자) ---\n" + raw
         )
         debug_info += _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json)])
-        yield raw, "", (
+        yield raw, (
             f"응답이 max_tokens({llm_client.MAX_TOKENS}) 한도에 도달해 중간에 잘렸습니다. "
             f"씬 개수를 줄이거나 요청을 나눠서 다시 시도해주세요."
         ), debug_info, history
@@ -588,36 +577,15 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
     except (json.JSONDecodeError, KeyError, TypeError):
         debug_info = "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
-        yield json_part, "", "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
+        yield json_part, "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
         return
-
-    yield pretty, "", "씬별 설명 생성 중...", "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw, new_history
-
-    # Step 4: ask DeepSeek for per-scene Korean descriptions, based on the generated JSON
-    desc_messages = [
-        {"role": "system", "content": SCENE_DESCRIPTION_SYSTEM_PROMPT},
-        {"role": "user", "content": (
-            f"Series description:\n{description}\n\n"
-            f"Generated preset JSON:\n{pretty}"
-        )},
-    ]
-    description_part = ""
-    usage_desc = None
-    for description_part, _finish_reason, usage_desc in llm_client.chat_stream(api_key, desc_messages, temperature=0.5, model=model, base_url=base_url):
-        debug_info = (
-            "검색된 후보 태그([유사도]):\n" + candidates_debug_text
-            + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
-            + "\n\n--- AI 원본 응답 (설명, 생성 중) ---\n" + description_part
-        )
-        yield pretty, description_part, "씬별 설명 생성 중...", debug_info, new_history
 
     debug_info = (
         "검색된 후보 태그([유사도]):\n" + candidates_debug_text
         + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
-        + "\n\n--- AI 원본 응답 (설명) ---\n" + description_part
-        + _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json), ("씬 설명 생성", usage_desc)])
+        + _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json)])
     )
-    yield pretty, description_part, "생성 완료", debug_info, new_history
+    yield pretty, "생성 완료", debug_info, new_history
 
 
 # ---------------------------------------------------------------------------
