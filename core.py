@@ -344,38 +344,43 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
                         standing_notes: str = "", history: list = None, accumulate: bool = False,
                         model: str = None, base_url: str = None, extra_system_prompt: str = "",
                         embedding_base_url: str = None, embedding_model: str = None,
-                        embedding_api_key: str = None):
+                        embedding_api_key: str = None, use_db_reference: bool = True):
     history = history or []
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", "", history
-    if db is None or len(db) == 0:
+    if use_db_reference and (db is None or len(db) == 0):
         return "", "먼저 태그 DB(CSV)를 업로드해주세요.", "", history
 
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key)
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference)
     except Exception as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None):
-    # Step 1: embedding-based semantic search for candidate tags (no LLM call)
-    embedding_base_url = embedding_base_url or embedding_client.DEFAULT_EMBEDDING_BASE_URL
-    embedding_model = embedding_model or embedding_client.DEFAULT_EMBEDDING_MODEL
-    embedding_api_key = embedding_api_key or ""
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True):
+    usage_embed = None
+    if use_db_reference:
+        # Step 1: embedding-based semantic search for candidate tags (no LLM call)
+        embedding_base_url = embedding_base_url or embedding_client.DEFAULT_EMBEDDING_BASE_URL
+        embedding_model = embedding_model or embedding_client.DEFAULT_EMBEDDING_MODEL
+        embedding_api_key = embedding_api_key or ""
 
-    candidates, usage_embed = semantic_candidates(
-        user_request, db, embedding_api_key, embedding_base_url, embedding_model,
-        top_k=8 * variant_count + 16,
-    )
-    candidate_lines = [
-        f"{c['name']} : {_short_desc(c['description'])}" for c in candidates
-    ]
-    candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
-    candidates_debug_text = "\n".join(
-        f"[{c['_score']:.3f}] {c['name']} : {c['description']}" for c in candidates
-    ) if candidates else "(no candidates found)"
+        candidates, usage_embed = semantic_candidates(
+            user_request, db, embedding_api_key, embedding_base_url, embedding_model,
+            top_k=8 * variant_count + 16,
+        )
+        candidate_lines = [
+            f"{c['name']} : {_short_desc(c['description'])}" for c in candidates
+        ]
+        candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
+        candidates_debug_text = "\n".join(
+            f"[{c['_score']:.3f}] {c['name']} : {c['description']}" for c in candidates
+        ) if candidates else "(no candidates found)"
+    else:
+        candidates_text = "(DB 참조 비활성화됨 - 컨텍스트의 이전 태그를 참고하세요)"
+        candidates_debug_text = candidates_text
 
     # Step 2: single LLM call - request + matched candidate tags -> combine into final tags
     step_user_content = (
@@ -493,23 +498,26 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
                           model: str = None, base_url: str = None, extra_system_prompt: str = "",
                           embedding_base_url: str = None, embedding_model: str = None,
-                          embedding_api_key: str = None):
+                          embedding_api_key: str = None, use_db_reference: bool = True):
     history = history or []
     if not description or not description.strip():
         yield "", "시리즈 설명을 입력해주세요.", "", history
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference):
             yield item
     except Exception as e:
         yield "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None):
-    candidates_text = "(태그 DB가 업로드되지 않았습니다)"
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True):
+    candidates_text = (
+        "(DB 참조 비활성화됨 - 컨텍스트의 이전 태그를 참고하세요)" if not use_db_reference
+        else "(태그 DB가 업로드되지 않았습니다)"
+    )
     usage_concept = None
-    if db is not None and len(db) > 0:
+    if use_db_reference and db is not None and len(db) > 0:
         # Step 1: embedding-based semantic search for candidate tags (no LLM call)
         embedding_base_url = embedding_base_url or embedding_client.DEFAULT_EMBEDDING_BASE_URL
         embedding_model = embedding_model or embedding_client.DEFAULT_EMBEDDING_MODEL

@@ -99,6 +99,9 @@ with gr.Blocks(title="Prompt Generator") as demo:
             accumulate_context = gr.Checkbox(
                 label="컨텍스트 누적 (이전 대화 기억)", value=False
             )
+            use_db_reference = gr.Checkbox(
+                label="DB 참조 (임베딩 검색, 컨텍스트 누적 중 같은 구도 전개 시 끌 수 있음)", value=True
+            )
             clear_history_btn = gr.Button("대화 기록 초기화", size="sm")
             history_status = gr.Markdown("")
 
@@ -144,7 +147,7 @@ with gr.Blocks(title="Prompt Generator") as demo:
             core.generate_tag_combo,
             inputs=[api_key, combo_request, db_state, combo_variant_count, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
-                    embedding_base_url, embedding_model_select, embedding_api_key],
+                    embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference],
             outputs=[combo_tags, combo_explanation, combo_debug, history_state],
         )
 
@@ -199,7 +202,7 @@ with gr.Blocks(title="Prompt Generator") as demo:
             core.generate_multi_scene,
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
-                    embedding_base_url, embedding_model_select, embedding_api_key],
+                    embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference],
             outputs=[series_output, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,
