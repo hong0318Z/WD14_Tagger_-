@@ -158,6 +158,18 @@ def semantic_candidates(user_text, db, api_key, embedding_base_url, embedding_mo
     return results, usage
 
 
+CANDIDATE_DESC_MAX_LEN = 60
+
+
+def _short_desc(description: str) -> str:
+    """Trim a tag's full Korean description down for LLM-facing prompts; the keyword
+    suffix (' / 키워드: ...') is dropped first since the tag name already conveys it."""
+    desc = description.split(" / 키워드: ")[0]
+    if len(desc) > CANDIDATE_DESC_MAX_LEN:
+        desc = desc[:CANDIDATE_DESC_MAX_LEN].rstrip() + "..."
+    return desc
+
+
 def save_extra_system_prompt(prompt):
     local_config.save_config(extra_system_prompt=prompt or "")
 
@@ -354,7 +366,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         top_k=8 * variant_count + 16,
     )
     candidate_lines = [
-        f"{c['name']} : {c['description']}" for c in candidates
+        f"{c['name']} : {_short_desc(c['description'])}" for c in candidates
     ]
     candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
     candidates_debug_text = "\n".join(
@@ -502,7 +514,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         candidates, usage_concept = semantic_candidates(
             description, db, embedding_api_key, embedding_base_url, embedding_model, top_k=40,
         )
-        candidate_lines = [f"{c['name']} : {c['description']}" for c in candidates]
+        candidate_lines = [f"{c['name']} : {_short_desc(c['description'])}" for c in candidates]
         candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
         candidates_debug_text = "\n".join(
             f"[{c['_score']:.3f}] {c['name']} : {c['description']}" for c in candidates
