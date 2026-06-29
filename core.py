@@ -51,22 +51,26 @@ CHARS: defined per project by the user (e.g. a=Alice, b=Bob)
 PROMPT GROUPING (MODE 2 style):
 Every generated prompt MUST be a single line where tags are grouped thematically inside curly braces { }, \
 groups separated by ", ". Use this group order:
-{quality}, {background}, {composition / camera angle}, [for each character present, two adjacent groups:] \
-{that character's appearance traits}, {that character's pose / action / composition role}, {clothing}, {expression / emotional state / effects}
+{quality}, {background}, {composition / camera angle}, [for each character present, one OUTER group wrapping \
+that character's two inner groups:] {{that character's appearance traits}, {that character's pose / action \
+performed by THIS character}}, {clothing}, {expression / emotional state / effects}
 
 Rules:
-- Each character gets its OWN pair of groups: one group for fixed appearance traits (body type, hair, skin, \
-distinguishing features, "1girl"/"1boy"/"faceless male" etc.), and a separate adjacent group for that \
-character's pose/action/role in the composition. Keeping these separate makes later edits easy \
-(e.g. swap only the pose group without touching appearance).
-- If male and female characters are both present, output the male group(s) first, then the female group(s), \
-matching the example order: {male appearance}, {male pose/action}, {female appearance}, {female pose/action}.
+- Each character's appearance group and pose/action group MUST be wrapped together inside one extra pair of \
+curly braces - e.g. {{1boy, dark-skinned male, bald}, {kissing her, gripping her hips}} - so it's unambiguous \
+that the action belongs to THIS character and not whichever character happens to be adjacent. Never output a \
+character's action as a bare top-level group; it must always be nested with that character's appearance group.
+- The action tags inside a character's pose/action group must describe what THAT character is doing/performing \
+(active verbs: kissing, gripping, thrusting, holding), not what is being done to them.
+- If male and female characters are both present, output the male's nested group first, then the female's, \
+matching the example order: {{male appearance}, {male action}}, {{female appearance}, {female action}}.
 - Quality tags first, then background, then composition/camera angle.
 - Expression / emotional state / effect tags (blush, sweat, tears, trembling, etc.) always go in the LAST group.
 - All tags inside groups must be in English, danbooru-style, comma separated within each group.
 EXAMPLE: {masterpiece, best quality, highres}, {dark background}, {full body shot, from side}, \
-{1boy, dark-skinned male, bald, faceless}, {standing, gripping her hips}, \
-{1girl, long hair, black pubic hair}, {lying on back, legs spread}, {nude}, {blushing, trembling, biting lip, shame}"""
+{{1boy, dark-skinned male, bald, faceless}, {kissing her, gripping her hips}}, \
+{{1girl, long hair, black pubic hair}, {lying on back, legs spread, kissing him back}}, \
+{nude}, {blushing, trembling, biting lip, shame}"""
 
 
 def load_tag_db(file_obj):
