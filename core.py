@@ -32,21 +32,13 @@ def prepare_json_download(json_text):
     return gr.update(value=path, visible=True)
 
 EXAMPLE_PRESET = {
-    "id": "<timestamp_ms>",
     "name": "<series name in Korean>",
     "scenes": [
         {
-            "id": "<timestamp_ms>",
             "name": "<short scene code, e.g. m_s_1>",
             "scenePrompt": "<grouped danbooru tags in English, see ASSET_GROUPING_RULES>",
-            "queueCount": 0,
-            "images": [],
-            "createdAt": "<timestamp_ms>",
-            "width": 1216,
-            "height": 832,
         }
     ],
-    "createdAt": "<timestamp_ms>",
 }
 
 ASSET_GROUPING_RULES = """[IMAGE ASSET SYSTEM - PROMPT GROUPING RULES]
@@ -424,25 +416,43 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
 # Tab 3: series description -> NAIS preset JSON (multi-scene)
 # ---------------------------------------------------------------------------
 
+def _assemble_preset(parsed):
+    """Fill in the bookkeeping fields (ids, timestamps, queueCount, images, width, height) that the LLM
+    no longer needs to generate - only "name" and "scenePrompt" per scene come from the model."""
+    now_ms = int(time.time() * 1000)
+    scenes = []
+    for i, scene in enumerate(parsed["scenes"]):
+        scene_id = now_ms + i
+        scenes.append({
+            "id": str(scene_id),
+            "name": scene["name"],
+            "scenePrompt": scene["scenePrompt"],
+            "queueCount": 0,
+            "images": [],
+            "createdAt": scene_id,
+            "width": 1216,
+            "height": 832,
+        })
+    return {
+        "id": str(now_ms),
+        "name": parsed["name"],
+        "scenes": scenes,
+        "createdAt": now_ms,
+    }
+
+
 MULTI_SCENE_SYSTEM_PROMPT = """You are an assistant that writes prompt presets for the NAIS image generation tool.
-Given a description of a series of scenes (in Korean), output a single JSON object with EXACTLY this structure:
+Given a description of a series of scenes (in Korean), output a single JSON object with EXACTLY this structure \
+(only the creative content - ids, timestamps, and other bookkeeping fields are added later by code, not by you):
 
 {
-  "id": "<13-digit timestamp string>",
   "name": "<series name, in Korean>",
   "scenes": [
     {
-      "id": "<13-digit timestamp string, unique per scene>",
       "name": "<short scene code following the NAMING RULE below, e.g. m_s_1>",
-      "scenePrompt": "<grouped danbooru tags in English, see PROMPT GROUPING RULES below>",
-      "queueCount": 0,
-      "images": [],
-      "createdAt": <same number as id, as an integer>,
-      "width": 1216,
-      "height": 832
+      "scenePrompt": "<grouped danbooru tags in English, see PROMPT GROUPING RULES below>"
     }
-  ],
-  "createdAt": <same number as the top-level id, as an integer>
+  ]
 }
 
 """ + ASSET_GROUPING_RULES + """
@@ -456,12 +466,11 @@ tags (quality, composition, etc.) that are not in the candidate list.
 the user provides (or sensible defaults if none given), and the number should reflect the \
 NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
 - Generate as many scenes as make sense for the user's description (each meaningful step/pose should be its own scene).
-- "id" and "createdAt" values must be plausible 13-digit millisecond timestamps, each scene with a distinct id.
 - If the conversation history contains an earlier series JSON, treat the new request as a revision/follow-up \
 of that series (the user may be asking to add, change, or extend scenes).
 
-OUTPUT FORMAT: respond with ONLY the JSON object described above, valid JSON, ready to be pasted directly \
-into the NAI preset tool. Do not add any commentary, explanation, or extra text before or after the JSON."""
+OUTPUT FORMAT: respond with ONLY the JSON object described above, valid JSON. Do not add any commentary, \
+explanation, or extra text before or after the JSON."""
 
 
 SCENE_DESCRIPTION_SYSTEM_PROMPT = """You are an assistant that writes short Korean descriptions for scenes \
@@ -512,11 +521,9 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     else:
         candidates_debug_text = candidates_text
 
-    base_ts = int(time.time() * 1000)
     user_content = (
         f"Reference structure (field names and types only, not real content):\n"
         f"{json.dumps(EXAMPLE_PRESET, ensure_ascii=False, indent=2)}\n\n"
-        f"A timestamp around {base_ts} can be used as a base for generating IDs.\n\n"
     )
     if char_def and char_def.strip():
         user_content += f"CHARS / CATEGORIES for naming: {char_def.strip()}\n\n"
@@ -577,8 +584,9 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
 
     try:
         parsed = json.loads(json_part)
+        parsed = _assemble_preset(parsed)
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, KeyError, TypeError):
         debug_info = "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
         yield json_part, "", "JSON 파싱에 실패했습니다. 원본 응답을 표시합니다.", debug_info, new_history
         return
