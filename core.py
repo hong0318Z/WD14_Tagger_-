@@ -417,8 +417,14 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         api_key, step2_messages, temperature=0.8,
         model=model, base_url=base_url,
     )
+    final_json_part = raw_final.strip()
+    if final_json_part.startswith("```"):
+        final_json_part = final_json_part.split("\n", 1)[1] if "\n" in final_json_part else final_json_part
+        if final_json_part.endswith("```"):
+            final_json_part = final_json_part[:-3]
+        final_json_part = final_json_part.strip()
     try:
-        final = json.loads(raw_final)
+        final = json.loads(final_json_part)
         variants = final.get("variants", [])
     except json.JSONDecodeError:
         variants = [{"tags": raw_final, "explanation": ""}]
