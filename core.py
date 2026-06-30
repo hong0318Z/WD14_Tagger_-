@@ -300,6 +300,20 @@ def _sys(base: str, extra: str = "") -> str:
     return base + (f"\n\n---\nADDITIONAL INSTRUCTIONS:\n{extra.strip()}" if extra and extra.strip() else "")
 
 
+def _extract_tag_tokens(text: str) -> list:
+    """Pull individual tag tokens out of a brace-grouped prompt string."""
+    cleaned = text.replace("{", " ").replace("}", " ")
+    return [t.strip() for t in cleaned.split(",") if t.strip()]
+
+
+def _unknown_tags(text: str, db) -> list:
+    """Code-level hallucination check: tag tokens in text not present in the DB.
+    Detection only (not stripped) since the grouped-brace format would break if tokens were removed silently."""
+    if db is None or len(db) == 0:
+        return []
+    return [t for t in _extract_tag_tokens(text) if not db.exists(t)]
+
+
 def _fmt_usage_log(steps: list) -> str:
     """steps: list of (label, usage_dict_or_None). Returns a Korean log block for display."""
     lines = ["", "─── 토큰/시간 로그 ───"]
@@ -429,6 +443,10 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
         )
 
     debug_info = "검색된 후보 태그(임베딩, [유사도]):\n" + candidates_debug_text
+    if use_db_reference:
+        unknown = sorted({t for v in variants for t in _unknown_tags(v.get("tags", ""), db)})
+        if unknown:
+            debug_info += f"\n\n⚠️ DB에 없는 태그 ({len(unknown)}개, LLM이 추가했을 수 있음): {', '.join(unknown)}"
     debug_info += _fmt_usage_log([("임베딩 검색", usage_embed), ("태그 생성", usage2)])
     return "\n\n".join(tags_blocks), "\n\n".join(explanation_blocks), debug_info, new_history
 
@@ -607,8 +625,15 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     debug_info = (
         "검색된 후보 태그([유사도]):\n" + candidates_debug_text
         + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
-        + _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json)])
     )
+    if use_db_reference:
+        unknown = sorted({
+            t for scene in parsed.get("scenes", [])
+            for t in _unknown_tags(scene.get("scenePrompt", ""), db)
+        })
+        if unknown:
+            debug_info += f"\n\n⚠️ DB에 없는 태그 ({len(unknown)}개, LLM이 추가했을 수 있음): {', '.join(unknown)}"
+    debug_info += _fmt_usage_log([("임베딩 검색", usage_concept), ("JSON 생성", usage_json)])
     yield pretty, "생성 완료", debug_info, new_history
 
 

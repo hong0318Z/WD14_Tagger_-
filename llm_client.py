@@ -19,8 +19,15 @@ ANTHROPIC_MODELS = ["claude-sonnet-4-6", "claude-haiku-4-5"]
 GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 GOOGLE_MODELS = ["gemini-3.5-pro", "gemini-3.5-flash", "gemini-3.1-pro", "gemini-3.1-flash"]
 
+# Lightweight local llama.cpp-style endpoint (e.g. a smaller gemma model dedicated to
+# fast decompose/select-style calls, run alongside the heavier local server above).
+# base_url/model are editable in the UI - these are just starting defaults.
+LOCAL_LIGHT_BASE_URL = "http://192.168.0.116:8080/v1"
+LOCAL_LIGHT_MODELS = ["gemma4"]
+
 PROVIDERS = {
     "로컬 서버 (OpenAI 호환)": {"base_url": DEFAULT_BASE_URL, "models": AVAILABLE_MODELS},
+    "로컬 경량 LLM (분해/선별용)": {"base_url": LOCAL_LIGHT_BASE_URL, "models": LOCAL_LIGHT_MODELS},
     "DeepSeek API": {"base_url": DEEPSEEK_BASE_URL, "models": DEEPSEEK_MODELS},
     "Anthropic (Claude)": {"base_url": ANTHROPIC_BASE_URL, "models": ANTHROPIC_MODELS},
     "Google (Gemini)": {"base_url": GOOGLE_BASE_URL, "models": GOOGLE_MODELS},
