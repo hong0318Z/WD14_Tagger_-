@@ -152,8 +152,10 @@ with gr.Blocks(title="Prompt Generator") as demo:
         combo_explanation = gr.Textbox(label="설명 (한국어)", lines=4)
         combo_debug = gr.Textbox(label="검색된 후보 태그 (디버그)", lines=10)
 
-        combo_btn.click(
-            core.generate_tag_combo,
+        gr.Markdown("(요청 입력란에서 Ctrl+Enter로 마우스 없이 생성)")
+        gr.on(
+            triggers=[combo_btn.click, combo_request.submit],
+            fn=core.generate_tag_combo,
             inputs=[api_key, combo_request, db_state, combo_variant_count, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference],
@@ -207,8 +209,10 @@ with gr.Blocks(title="Prompt Generator") as demo:
         series_download = gr.DownloadButton(label="JSON 파일 다운로드", visible=False)
         series_debug = gr.Textbox(label="디버그 (후보 태그 / AI 원본 응답)", lines=15)
 
-        series_btn.click(
-            core.generate_multi_scene,
+        gr.Markdown("(시리즈 설명 입력란에서 Ctrl+Enter로 마우스 없이 생성)")
+        gr.on(
+            triggers=[series_btn.click, series_description.submit],
+            fn=core.generate_multi_scene,
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference],
