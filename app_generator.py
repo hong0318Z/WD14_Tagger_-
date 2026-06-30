@@ -202,6 +202,17 @@ with gr.Blocks(title="Prompt Generator") as demo:
     with gr.Tab("2. 다중 씬(시리즈) 생성"):
         gr.Markdown("시리즈 설명 → NAIS 프리셋 JSON (스트리밍)")
         series_chars = gr.Textbox(label="캐릭터/카테고리 정의 (예: a=Alice, b=Bob)", lines=1)
+        with gr.Row():
+            series_fixed_reference = gr.Textbox(
+                label="고정 레퍼런스 태그 (모든 씬에 그대로 유지, 예: 캐릭터 외형)",
+                placeholder="예: 1girl, silver hair, twintails, red eyes",
+                lines=3, scale=1,
+            )
+            series_flexible_reference = gr.Textbox(
+                label="변경 가능 레퍼런스 태그 (씬마다 자유롭게 바뀌어도 되는 풀, 예: 포즈/표정)",
+                placeholder="예: smiling, blushing, looking back, sitting, standing",
+                lines=3, scale=1,
+            )
         series_description = gr.Textbox(label="시리즈 설명 (한국어)", lines=6)
         series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
         series_status = gr.Markdown("")
@@ -215,7 +226,8 @@ with gr.Blocks(title="Prompt Generator") as demo:
             fn=core.generate_multi_scene,
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
-                    embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference],
+                    embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference,
+                    series_fixed_reference, series_flexible_reference],
             outputs=[series_output, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,

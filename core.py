@@ -565,6 +565,12 @@ NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
 - Generate as many scenes as make sense for the user's description (each meaningful step/pose should be its own scene).
 - If the conversation history contains an earlier series JSON, treat the new request as a revision/follow-up \
 of that series (the user may be asking to add, change, or extend scenes).
+- If FIXED REFERENCE TAGS are given: include those EXACT tags, unchanged, in every single scene's "scenePrompt" \
+(same wording, same grouping placement every time - e.g. character identity/appearance tags that must never drift \
+across scenes in the series).
+- If CHANGEABLE REFERENCE TAGS are given: treat those as a starting pool you may freely vary, drop, replace, or \
+recombine per scene to match each scene's specific action/pose/expression - they are NOT required verbatim like \
+the fixed tags are.
 
 OUTPUT FORMAT: respond with ONLY the JSON object described above, valid JSON. Do not add any commentary, \
 explanation, or extra text before or after the JSON."""
@@ -574,20 +580,21 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
                           model: str = None, base_url: str = None, extra_system_prompt: str = "",
                           embedding_base_url: str = None, embedding_model: str = None,
-                          embedding_api_key: str = None, use_db_reference: bool = True):
+                          embedding_api_key: str = None, use_db_reference: bool = True,
+                          fixed_reference: str = "", flexible_reference: str = ""):
     history = history or []
     if not description or not description.strip():
         yield "", "시리즈 설명을 입력해주세요.", "", history
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference):
             yield item
     except Exception as e:
         yield "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference=""):
     candidates_text = (
         "(DB 참조 비활성화됨 - 컨텍스트의 이전 태그를 참고하세요)" if not use_db_reference
         else "(태그 DB가 업로드되지 않았습니다)"
@@ -625,6 +632,16 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         f"Candidate tags from the database (prefer these when they fit, "
         f"since they are confirmed to exist):\n{candidates_text}\n\n"
     )
+    if fixed_reference and fixed_reference.strip():
+        user_content += (
+            f"FIXED REFERENCE TAGS (must appear unchanged, verbatim, in EVERY scene's scenePrompt):\n"
+            f"{fixed_reference.strip()}\n\n"
+        )
+    if flexible_reference and flexible_reference.strip():
+        user_content += (
+            f"CHANGEABLE REFERENCE TAGS (a starting pool you may vary/replace/recombine per scene, "
+            f"not required verbatim):\n{flexible_reference.strip()}\n\n"
+        )
     user_content += f"Series description:\n{description}"
 
     messages = [{"role": "system", "content": _sys(MULTI_SCENE_SYSTEM_PROMPT, extra_system_prompt)}]
