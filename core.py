@@ -16,7 +16,8 @@ def _lazy_import_tagger():
     return _predict, _read_exif
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-SAVED_TAG_DB_PATH = os.path.join(DATA_DIR, "tag_db.csv")
+SAVED_TAG_DB_PATH = os.path.join(DATA_DIR, "tag_db.csv")  # legacy single-file location (still auto-migrated)
+TAG_DB_DIR = os.path.join(DATA_DIR, "tag_dbs")  # holds however many CSVs are kept resident at once
 DOWNLOAD_DIR = os.path.join(DATA_DIR, "downloads")
 
 
@@ -73,18 +74,41 @@ EXAMPLE: {masterpiece, best quality, highres}, {dark background}, {full body sho
 {nude}, {blushing, trembling, biting lip, shame}"""
 
 
-def load_tag_db(file_obj):
+def _tag_db_status_text(db):
+    if len(db) == 0:
+        return "태그 DB가 로드되지 않았습니다. (선택 사항)"
+    files = "\n".join(f"  - {p}" for p in db.sources) if db.sources else ""
+    return (
+        f"태그 DB 로드 완료: {len(db)}개 태그 (파일 {len(db.sources)}개, 디렉토리: {TAG_DB_DIR})"
+        + (f"\n{files}" if files else "")
+    )
+
+
+def load_tag_db(file_objs):
+    """file_objs: list of uploaded files (gr.File file_count='multiple'). Replaces
+    whichever CSVs were previously kept resident with this new set, persisting each
+    into TAG_DB_DIR so they're all reloaded together on the next restart."""
+    if not file_objs:
+        db = TagDB()
+        return db, _tag_db_status_text(db)
+    if not isinstance(file_objs, list):
+        file_objs = [file_objs]
+
+    os.makedirs(TAG_DB_DIR, exist_ok=True)
+    for old in os.listdir(TAG_DB_DIR):
+        os.remove(os.path.join(TAG_DB_DIR, old))
+
+    persisted_paths = []
+    for file_obj in file_objs:
+        if not hasattr(file_obj, "name"):
+            continue
+        dest = os.path.join(TAG_DB_DIR, os.path.basename(file_obj.name))
+        shutil.copyfile(file_obj.name, dest)
+        persisted_paths.append(dest)
+
     db = TagDB()
-    count = db.load(file_obj)
-    if count == 0:
-        return db, "태그 DB가 로드되지 않았습니다. (선택 사항)"
-
-    # persist a copy so it survives restarts
-    if hasattr(file_obj, "name"):
-        os.makedirs(DATA_DIR, exist_ok=True)
-        shutil.copyfile(file_obj.name, SAVED_TAG_DB_PATH)
-
-    return db, f"태그 DB 로드 완료: {count}개 태그"
+    db.load_many(persisted_paths)
+    return db, _tag_db_status_text(db)
 
 
 def get_api_key_for_provider(provider):
@@ -135,12 +159,22 @@ def load_saved_state():
     embedding_model = cfg.get("embedding_model", embedding_client.DEFAULT_EMBEDDING_MODEL)
     embedding_api_key = cfg.get("embedding_api_key", "")
 
-    db = TagDB()
-    status = "태그 DB가 로드되지 않았습니다. (선택 사항)"
+    # migrate the old single-file location into the multi-file directory, once
     if os.path.exists(SAVED_TAG_DB_PATH):
-        count = db.load(SAVED_TAG_DB_PATH)
-        if count:
-            status = f"태그 DB 로드 완료: {count}개 태그 (저장된 파일에서 복원)"
+        os.makedirs(TAG_DB_DIR, exist_ok=True)
+        migrated = os.path.join(TAG_DB_DIR, os.path.basename(SAVED_TAG_DB_PATH))
+        if not os.path.exists(migrated):
+            shutil.copyfile(SAVED_TAG_DB_PATH, migrated)
+        os.remove(SAVED_TAG_DB_PATH)
+
+    db = TagDB()
+    if os.path.isdir(TAG_DB_DIR):
+        paths = sorted(
+            os.path.join(TAG_DB_DIR, f) for f in os.listdir(TAG_DB_DIR) if f.lower().endswith(".csv")
+        )
+        if paths:
+            db.load_many(paths)
+    status = _tag_db_status_text(db)
 
     return (api_key, db, status, notes, base_url, extra_prompt, provider,
             embedding_base_url, embedding_model, embedding_api_key)

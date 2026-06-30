@@ -12,15 +12,34 @@ class TagDB:
 
     def __init__(self):
         self.by_name = {}
+        self.sources = []  # absolute paths of every CSV file currently merged in
 
     def load(self, file_obj):
+        """Load a single CSV, replacing any previously loaded data. For loading
+        several files at once (kept resident together), use load_many()."""
         self.by_name = {}
+        self.sources = []
         if file_obj is None:
             return 0
+        return self._merge_one(file_obj)
 
+    def load_many(self, file_objs):
+        """Load and merge multiple CSV files into one resident DB. Later files'
+        entries win on name conflicts. Replaces any previously loaded data."""
+        self.by_name = {}
+        self.sources = []
+        total = 0
+        for file_obj in file_objs or []:
+            total = self._merge_one(file_obj)
+        return total
+
+    def _merge_one(self, file_obj):
+        path = None
         if isinstance(file_obj, str) and os.path.exists(file_obj):
+            path = file_obj
             f = open(file_obj, "r", encoding="utf-8-sig", newline="")
         elif hasattr(file_obj, "name"):
+            path = file_obj.name
             f = open(file_obj.name, "r", encoding="utf-8-sig", newline="")
         else:
             f = io.StringIO(file_obj)
@@ -46,6 +65,8 @@ class TagDB:
             }
 
         f.close()
+        if path and path not in self.sources:
+            self.sources.append(os.path.abspath(path))
         return len(self.by_name)
 
     def __len__(self):

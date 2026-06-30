@@ -66,7 +66,8 @@ with gr.Blocks(title="Prompt Generator") as demo:
 
         with gr.Row():
             tag_db_file = gr.File(
-                label="단부루 태그 CSV (선택, 저장됨)", file_types=[".csv"], scale=3
+                label="단부루 태그 CSV (여러 개 동시 상주 가능, 저장됨)",
+                file_types=[".csv"], file_count="multiple", scale=3,
             )
             tag_db_status = gr.Markdown("태그 DB 없음", scale=2)
 
