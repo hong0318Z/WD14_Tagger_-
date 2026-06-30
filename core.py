@@ -129,7 +129,7 @@ def load_saved_state():
     provider = cfg.get("last_provider") or next(iter(llm_client.PROVIDERS))
     api_key = cfg.get("api_keys", {}).get(provider, "")
     notes = cfg.get("standing_notes", "")
-    base_url = cfg.get("base_url", llm_client.PROVIDERS[provider]["base_url"])
+    base_url = cfg.get("base_urls", {}).get(provider) or llm_client.PROVIDERS[provider]["base_url"]
     extra_prompt = cfg.get("extra_system_prompt", "")
     embedding_base_url = cfg.get("embedding_base_url", embedding_client.DEFAULT_EMBEDDING_BASE_URL)
     embedding_model = cfg.get("embedding_model", embedding_client.DEFAULT_EMBEDDING_MODEL)
@@ -178,8 +178,26 @@ def save_extra_system_prompt(prompt):
     local_config.save_config(extra_system_prompt=prompt or "")
 
 
-def save_base_url(url):
-    local_config.save_config(base_url=url or llm_client.DEFAULT_BASE_URL)
+def save_base_url(url, provider):
+    """Base URL is saved per-provider, otherwise switching providers makes whichever
+    one was edited last silently overwrite every other provider's URL on reload."""
+    cfg = local_config.load_config()
+    base_urls = cfg.get("base_urls", {})
+    base_urls[provider] = url or llm_client.PROVIDERS.get(provider, {}).get("base_url", llm_client.DEFAULT_BASE_URL)
+    local_config.save_config(base_urls=base_urls)
+
+
+def get_base_url_for_provider(provider):
+    cfg = local_config.load_config()
+    return cfg.get("base_urls", {}).get(provider) or llm_client.PROVIDERS.get(provider, {}).get("base_url", llm_client.DEFAULT_BASE_URL)
+
+
+def list_main_models(api_key, base_url):
+    try:
+        models = llm_client.list_models(api_key, base_url)
+        return gr.update(choices=models, value=models[0] if models else None), f"모델 {len(models)}개 조회됨"
+    except Exception as e:
+        return gr.update(), f"조회 실패: {e}"
 
 
 def save_notes(notes):

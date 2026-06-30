@@ -44,6 +44,13 @@ def trim_history(history: list) -> list:
     return history[-MAX_HISTORY_MESSAGES:]
 
 
+def list_models(api_key: str, base_url: str) -> list:
+    """Returns a list of model id strings available on the chat server."""
+    client = _client(api_key, base_url)
+    resp = client.models.list()
+    return sorted(m.id for m in resp.data)
+
+
 def _client(api_key: str, base_url: str) -> OpenAI:
     return OpenAI(
         api_key=api_key or "local",

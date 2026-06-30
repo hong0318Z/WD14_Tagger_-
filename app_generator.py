@@ -42,18 +42,26 @@ with gr.Blocks(title="Prompt Generator") as demo:
                 allow_custom_value=True,
                 scale=2,
             )
+            model_refresh_btn = gr.Button("모델 목록 조회", scale=1)
+        model_status = gr.Markdown("")
 
         def _on_provider_change(provider):
             info = llm_client.PROVIDERS[provider]
             models = info["models"]
             saved_key = core.get_api_key_for_provider(provider)
+            saved_url = core.get_base_url_for_provider(provider)
             core.save_provider(provider)
-            return info["base_url"], gr.update(choices=models, value=models[0]), saved_key
+            return saved_url, gr.update(choices=models, value=models[0]), saved_key
 
         provider_radio.change(
             _on_provider_change,
             inputs=provider_radio,
             outputs=[base_url, model_select, api_key],
+        )
+        model_refresh_btn.click(
+            core.list_main_models,
+            inputs=[api_key, base_url],
+            outputs=[model_select, model_status],
         )
 
         with gr.Row():
@@ -112,7 +120,7 @@ with gr.Blocks(title="Prompt Generator") as demo:
                      embedding_base_url, embedding_model_select, embedding_api_key],
         )
         api_key.change(core.save_api_key_for_provider, inputs=[api_key, provider_radio])
-        base_url.change(core.save_base_url, inputs=base_url)
+        base_url.change(core.save_base_url, inputs=[base_url, provider_radio])
         embedding_base_url.change(core.save_embedding_base_url, inputs=embedding_base_url)
         embedding_model_select.change(core.save_embedding_model, inputs=embedding_model_select)
         embedding_api_key.change(core.save_embedding_api_key, inputs=embedding_api_key)
