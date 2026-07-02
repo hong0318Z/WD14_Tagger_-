@@ -213,7 +213,12 @@ with gr.Blocks(title="Prompt Generator") as demo:
                 placeholder="예: smiling, blushing, looking back, sitting, standing",
                 lines=3, scale=1,
             )
-        series_description = gr.Textbox(label="시리즈 설명 (한국어)", lines=6)
+        series_description = gr.Textbox(label="시리즈 설명 (한국어, 자유 서술)", lines=6)
+        series_scene_list = gr.Textbox(
+            label="씬 목록 (선택, 씬이름 : 설명 형식으로 한 줄에 하나씩 - 채우면 이 목록의 이름/개수를 그대로 사용)",
+            placeholder="m_com_1 : 공원에서 산책하며 웃는 모습\nm_com_2 : 벤치에 앉아 고민하는 모습",
+            lines=6,
+        )
         series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
         series_status = gr.Markdown("")
         series_output = gr.Code(label="결과 JSON (NAI 프리셋에 붙여넣기)", language="json", lines=25)
@@ -227,7 +232,7 @@ with gr.Blocks(title="Prompt Generator") as demo:
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference,
-                    series_fixed_reference, series_flexible_reference],
+                    series_fixed_reference, series_flexible_reference, series_scene_list],
             outputs=[series_output, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,
@@ -313,6 +318,35 @@ with gr.Blocks(title="Prompt Generator") as demo:
 
         chat_clear_btn.click(lambda: ([], ""), outputs=[chat_display, chat_response])
         clear_base_btn.click(lambda: "", outputs=base_content)
+
+        gr.Markdown(
+            "---\n#### 씬 목록 → 지침 생성\n"
+            "기존에 정리한 목록(태그/JSON 등)과 씬 이름 리스트를 주면, AI가 그 안의 명명/구조 규칙을 분석해서 "
+            "앞으로의 모든 생성 프롬프트에 계속 상주시킬 영어 지침으로 정리해줍니다."
+        )
+        with gr.Row():
+            guideline_existing_list = gr.Textbox(
+                label="기존에 정리한 목록 (태그 조합, JSON 등 붙여넣기)", lines=8, scale=1,
+            )
+            guideline_scene_names = gr.Textbox(
+                label="씬 이름 리스트", lines=8, scale=1,
+                placeholder="m_com_1\nm_com_2\nm_sex_4\n...",
+            )
+        guideline_btn = gr.Button("지침 생성 (영어)")
+        guideline_status = gr.Markdown("")
+        guideline_output = gr.Textbox(label="생성된 지침 (영어, 수정 가능)", lines=10)
+        guideline_apply_btn = gr.Button("고정 지시사항에 추가", variant="primary")
+
+        guideline_btn.click(
+            core.generate_scene_guideline,
+            inputs=[api_key, guideline_existing_list, guideline_scene_names, model_select, base_url, extra_system_prompt],
+            outputs=[guideline_output, guideline_status],
+        )
+        guideline_apply_btn.click(
+            core.append_to_standing_notes,
+            inputs=[guideline_output, standing_notes],
+            outputs=[standing_notes, guideline_status],
+        )
 
     with gr.Tab("5. JSON 통합"):
         gr.Markdown("NAIS 프리셋 JSON 여러 개를 업로드하면 씬들을 하나의 프리셋으로 합쳐줍니다. (AI 호출 없음)")

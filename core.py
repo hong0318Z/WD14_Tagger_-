@@ -565,6 +565,9 @@ NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
 - Generate as many scenes as make sense for the user's description (each meaningful step/pose should be its own scene).
 - If the conversation history contains an earlier series JSON, treat the new request as a revision/follow-up \
 of that series (the user may be asking to add, change, or extend scenes).
+- If an EXPLICIT SCENE LIST is given (lines of "scene name : description"), it OVERRIDES free-form scene \
+planning: output exactly one scene per listed line, using that exact name and that description as the basis \
+for that scene's scenePrompt. Do not invent extra scenes, skip any, or rename them.
 - If FIXED REFERENCE TAGS are given: include those EXACT tags, unchanged, in every single scene's "scenePrompt" \
 (same wording, same grouping placement every time - e.g. character identity/appearance tags that must never drift \
 across scenes in the series).
@@ -576,29 +579,51 @@ OUTPUT FORMAT: respond with ONLY the JSON object described above, valid JSON. Do
 explanation, or extra text before or after the JSON."""
 
 
+def _parse_scene_list(scene_list_text: str) -> list:
+    """Parses lines of "씬이름 : 설명" into [(name, desc), ...], skipping blank/malformed lines."""
+    pairs = []
+    for line in (scene_list_text or "").splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        name, desc = line.split(":", 1)
+        name, desc = name.strip(), desc.strip()
+        if name:
+            pairs.append((name, desc))
+    return pairs
+
+
 def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           standing_notes: str = "", history: list = None, accumulate: bool = False,
                           model: str = None, base_url: str = None, extra_system_prompt: str = "",
                           embedding_base_url: str = None, embedding_model: str = None,
                           embedding_api_key: str = None, use_db_reference: bool = True,
-                          fixed_reference: str = "", flexible_reference: str = ""):
+                          fixed_reference: str = "", flexible_reference: str = "",
+                          scene_list: str = ""):
     history = history or []
-    if not description or not description.strip():
-        yield "", "시리즈 설명을 입력해주세요.", "", history
+    has_description = bool(description and description.strip())
+    has_scene_list = bool(scene_list and scene_list.strip())
+    if not has_description and not has_scene_list:
+        yield "", "시리즈 설명 또는 씬 목록을 입력해주세요.", "", history
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference, scene_list):
             yield item
     except Exception as e:
         yield "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference=""):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference="", scene_list=""):
     candidates_text = (
         "(DB 참조 비활성화됨 - 컨텍스트의 이전 태그를 참고하세요)" if not use_db_reference
         else "(태그 DB가 업로드되지 않았습니다)"
     )
+    scene_pairs = _parse_scene_list(scene_list)
+    search_text = description.strip() if description and description.strip() else ""
+    if scene_pairs:
+        search_text = (search_text + "\n" + "\n".join(f"{n}: {d}" for n, d in scene_pairs)).strip()
+
     usage_concept = None
     if use_db_reference and db is not None and len(db) > 0:
         # Step 1: embedding-based semantic search for candidate tags (no LLM call)
@@ -607,7 +632,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
         embedding_api_key = embedding_api_key or ""
 
         candidates, usage_concept = semantic_candidates(
-            description, db, embedding_api_key, embedding_base_url, embedding_model, top_k=40,
+            search_text, db, embedding_api_key, embedding_base_url, embedding_model, top_k=40,
         )
         candidate_lines = [f"{c['name']} : {_short_desc(c['description'])}" for c in candidates]
         candidates_text = "\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
@@ -642,7 +667,17 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
             f"CHANGEABLE REFERENCE TAGS (a starting pool you may vary/replace/recombine per scene, "
             f"not required verbatim):\n{flexible_reference.strip()}\n\n"
         )
-    user_content += f"Series description:\n{description}"
+    if scene_pairs:
+        scene_list_lines = "\n".join(f"- {n} : {d}" for n, d in scene_pairs)
+        user_content += (
+            f"EXPLICIT SCENE LIST (use these EXACT scene names, one output scene per line here, "
+            f"in this exact order - do not rename, merge, split, drop, or add scenes beyond this list):\n"
+            f"{scene_list_lines}\n\n"
+        )
+    if description and description.strip():
+        user_content += f"Series description:\n{description}"
+    elif not scene_pairs:
+        user_content += "Series description: (none given - use the explicit scene list above)"
 
     messages = [{"role": "system", "content": _sys(MULTI_SCENE_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
@@ -814,6 +849,56 @@ Help the user discuss, refine, or generate image prompts, tags, and NAIS JSON pr
 When producing prompts or tags, use English danbooru-style tags grouped in {} braces.
 When producing or editing NAIS JSON, follow the established schema exactly (id, name, scenes[]).
 All conversational replies and explanations should be in Korean unless the user asks otherwise."""
+
+
+GUIDELINE_SYSTEM_PROMPT = """You analyze an existing list of NAI/danbooru scene prompts or presets and a list of \
+scene names, and distill the naming/structural conventions you observe into a compact ENGLISH instruction block.
+
+The output is meant to be pasted into a "standing instructions" field that gets prepended to every future \
+generation prompt, so the model handling future requests can follow the SAME conventions without seeing the \
+original examples again.
+
+Cover, if evident from the input:
+- The scene naming pattern (e.g. [char]_[category]_[number]) and what each part means.
+- Any numbering/intensity convention observed across the scene names.
+- Recurring tag groups, ordering, or phrasing patterns used across the example prompts.
+- Any character-identity tags that appear consistently and should stay fixed going forward.
+
+Do NOT restate the raw input verbatim - extract the PATTERN, not the specific content.
+Output ONLY the instruction block in English, formatted as short imperative bullet points. No commentary, \
+no preamble, no explanation of what you did."""
+
+
+def generate_scene_guideline(api_key: str, existing_list: str, scene_names: str,
+                              model: str = None, base_url: str = None, extra_system_prompt: str = ""):
+    """Analyzes a pasted list of existing scenes/tags + scene names and distills them into a reusable
+    English standing-instruction block, so future generations follow the same conventions without needing
+    the original examples in every prompt again."""
+    if not (existing_list and existing_list.strip()) and not (scene_names and scene_names.strip()):
+        return "", "기존 목록 또는 씬 이름 리스트를 입력해주세요."
+
+    user_content = ""
+    if existing_list and existing_list.strip():
+        user_content += f"Existing list (scenes/tags/presets already produced):\n{existing_list.strip()}\n\n"
+    if scene_names and scene_names.strip():
+        user_content += f"Scene name list:\n{scene_names.strip()}"
+
+    messages = [{"role": "system", "content": _sys(GUIDELINE_SYSTEM_PROMPT, extra_system_prompt)}]
+    messages.append({"role": "user", "content": user_content})
+
+    try:
+        result, usage = llm_client.chat(api_key, messages, temperature=0.3, model=model, base_url=base_url)
+        return result, "지침 생성 완료" + _fmt_usage_log([("지침 생성", usage)])
+    except Exception as e:
+        return "", f"오류 발생: {e}"
+
+
+def append_to_standing_notes(guideline: str, current_notes: str):
+    if not guideline or not guideline.strip():
+        return current_notes, "추가할 지침이 없습니다."
+    new_notes = (current_notes.rstrip() + "\n\n" + guideline.strip()) if current_notes and current_notes.strip() else guideline.strip()
+    save_notes(new_notes)
+    return new_notes, "고정 지시사항에 추가 완료"
 
 
 def chat_with_context(api_key: str, base_url: str, model: str,
