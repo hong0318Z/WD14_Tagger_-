@@ -10,8 +10,12 @@ import llm_client
 import presets as preset_store
 from tag_db import TagDB
 
-with gr.Blocks(title="Prompt Generator") as demo:
-    gr.Markdown("# Prompt Generator")
+with gr.Blocks(title="NAI Prompt Generator") as demo:
+    gr.Markdown(
+        "# NAI Prompt Generator\n"
+        "LLM으로 NAI용 태그/씬 프롬프트를 기획·생성하는 도구입니다. "
+        "① 태그 조합 → ② 에셋 네이밍/가이드 → ③ 다중 씬 시리즈 → ④ 대화로 다듬기 → ⑤ JSON 통합 순으로 사용하세요."
+    )
 
     db_state = gr.State(TagDB())
     history_state = gr.State([])
@@ -199,7 +203,26 @@ with gr.Blocks(title="Prompt Generator") as demo:
         preset_load_btn.click(_load_preset, inputs=[preset_dropdown], outputs=[combo_tags, preset_status])
         preset_delete_btn.click(_delete_preset, inputs=[preset_dropdown], outputs=[preset_dropdown, preset_status])
 
-    with gr.Tab("2. 다중 씬(시리즈) 생성"):
+    with gr.Tab("2. 에셋 네이밍 · 가이드"):
+        gr.Markdown("파일명 정의 / 씬 프롬프트 / 에셋 가이드 작성을 한 곳에서 - 시리즈 생성 전 기획 단계로 활용하세요.")
+        asset_mode = gr.Radio(
+            choices=list(core.MODE_TRIGGERS.keys()),
+            value=list(core.MODE_TRIGGERS.keys())[1],
+            label="모드 선택",
+        )
+        asset_chars = gr.Textbox(label="캐릭터 정의 (예: a=Alice, b=Bob)", lines=1)
+        asset_input = gr.Textbox(label="요청 내용 (한국어 가능)", lines=6)
+        asset_btn = gr.Button("생성", variant="primary")
+        asset_output = gr.Textbox(label="결과", lines=12)
+
+        asset_btn.click(
+            core.generate_asset_output,
+            inputs=[api_key, asset_mode, asset_chars, asset_input, history_state, accumulate_context,
+                    model_select, base_url, extra_system_prompt],
+            outputs=[asset_output, history_state],
+        )
+
+    with gr.Tab("3. 다중 씬(시리즈) 생성"):
         gr.Markdown("시리즈 설명 → NAIS 프리셋 JSON (스트리밍)")
         series_chars = gr.Textbox(label="캐릭터/카테고리 정의 (예: a=Alice, b=Bob)", lines=1)
         with gr.Row():
@@ -238,24 +261,6 @@ with gr.Blocks(title="Prompt Generator") as demo:
             core.prepare_json_download,
             inputs=[series_output],
             outputs=[series_download],
-        )
-
-    with gr.Tab("3. 이미지 에셋 시스템"):
-        asset_mode = gr.Radio(
-            choices=list(core.MODE_TRIGGERS.keys()),
-            value=list(core.MODE_TRIGGERS.keys())[1],
-            label="모드 선택",
-        )
-        asset_chars = gr.Textbox(label="캐릭터 정의 (예: a=Alice, b=Bob)", lines=1)
-        asset_input = gr.Textbox(label="요청 내용 (한국어 가능)", lines=6)
-        asset_btn = gr.Button("생성", variant="primary")
-        asset_output = gr.Textbox(label="결과", lines=12)
-
-        asset_btn.click(
-            core.generate_asset_output,
-            inputs=[api_key, asset_mode, asset_chars, asset_input, history_state, accumulate_context,
-                    model_select, base_url, extra_system_prompt],
-            outputs=[asset_output, history_state],
         )
 
     with gr.Tab("4. AI 대화 / 편집"):
