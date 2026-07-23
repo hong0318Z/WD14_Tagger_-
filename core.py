@@ -128,6 +128,26 @@ def save_provider(provider):
     local_config.save_config(last_provider=provider or "")
 
 
+def save_model_for_provider(model, provider):
+    """Model is saved per-provider, otherwise switching providers leaves the model dropdown
+    holding a model id that belongs to a different provider's API - causing generation
+    calls to send e.g. a DeepSeek model name to the local server (or vice versa) and error."""
+    cfg = local_config.load_config()
+    models_by_provider = cfg.get("models", {})
+    models_by_provider[provider] = model or ""
+    local_config.save_config(models=models_by_provider)
+    return model
+
+
+def get_model_for_provider(provider):
+    cfg = local_config.load_config()
+    saved = cfg.get("models", {}).get(provider)
+    provider_models = llm_client.PROVIDERS.get(provider, {}).get("models", [])
+    if saved and saved in provider_models:
+        return saved
+    return provider_models[0] if provider_models else saved or ""
+
+
 def save_embedding_base_url(url):
     local_config.save_config(embedding_base_url=url or embedding_client.DEFAULT_EMBEDDING_BASE_URL)
 
@@ -154,6 +174,9 @@ def load_saved_state():
     api_key = cfg.get("api_keys", {}).get(provider, "")
     notes = cfg.get("standing_notes", "")
     base_url = cfg.get("base_urls", {}).get(provider) or llm_client.PROVIDERS[provider]["base_url"]
+    provider_models = llm_client.PROVIDERS[provider]["models"]
+    model = get_model_for_provider(provider)
+    model_update = gr.update(choices=provider_models, value=model)
     extra_prompt = cfg.get("extra_system_prompt", "")
     embedding_base_url = cfg.get("embedding_base_url", embedding_client.DEFAULT_EMBEDDING_BASE_URL)
     embedding_model = cfg.get("embedding_model", embedding_client.DEFAULT_EMBEDDING_MODEL)
@@ -177,7 +200,7 @@ def load_saved_state():
     status = _tag_db_status_text(db)
 
     return (api_key, db, status, notes, base_url, extra_prompt, provider,
-            embedding_base_url, embedding_model, embedding_api_key)
+            embedding_base_url, embedding_model, embedding_api_key, model_update)
 
 
 def semantic_candidates(user_text, db, api_key, embedding_base_url, embedding_model, top_k=24):

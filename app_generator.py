@@ -54,8 +54,9 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             models = info["models"]
             saved_key = core.get_api_key_for_provider(provider)
             saved_url = core.get_base_url_for_provider(provider)
+            saved_model = core.get_model_for_provider(provider)
             core.save_provider(provider)
-            return saved_url, gr.update(choices=models, value=models[0]), saved_key
+            return saved_url, gr.update(choices=models, value=saved_model), saved_key
 
         provider_radio.change(
             _on_provider_change,
@@ -122,10 +123,11 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             core.load_saved_state,
             inputs=None,
             outputs=[api_key, db_state, tag_db_status, standing_notes, base_url, extra_system_prompt, provider_radio,
-                     embedding_base_url, embedding_model_select, embedding_api_key],
+                     embedding_base_url, embedding_model_select, embedding_api_key, model_select],
         )
         api_key.change(core.save_api_key_for_provider, inputs=[api_key, provider_radio])
         base_url.change(core.save_base_url, inputs=[base_url, provider_radio])
+        model_select.change(core.save_model_for_provider, inputs=[model_select, provider_radio])
         embedding_base_url.change(core.save_embedding_base_url, inputs=embedding_base_url)
         embedding_model_select.change(core.save_embedding_model, inputs=embedding_model_select)
         embedding_api_key.change(core.save_embedding_api_key, inputs=embedding_api_key)
