@@ -143,9 +143,22 @@ def get_model_for_provider(provider):
     cfg = local_config.load_config()
     saved = cfg.get("models", {}).get(provider)
     provider_models = llm_client.PROVIDERS.get(provider, {}).get("models", [])
-    if saved and saved in provider_models:
+    # Trust the saved model even if it's not in the hardcoded default list - it may have
+    # come from "모델 목록 조회" (a live fetch from the user's own server), which is exactly
+    # the kind of custom/local model name the static PROVIDERS list can't know about.
+    if saved:
         return saved
-    return provider_models[0] if provider_models else saved or ""
+    return provider_models[0] if provider_models else ""
+
+
+def get_model_choices_for_provider(provider):
+    """Dropdown choices for a provider: the static defaults plus the saved model if it's
+    a custom one not already in that list, so it doesn't just vanish from view."""
+    provider_models = list(llm_client.PROVIDERS.get(provider, {}).get("models", []))
+    model = get_model_for_provider(provider)
+    if model and model not in provider_models:
+        provider_models = provider_models + [model]
+    return provider_models, model
 
 
 def save_embedding_base_url(url):
@@ -174,8 +187,7 @@ def load_saved_state():
     api_key = cfg.get("api_keys", {}).get(provider, "")
     notes = cfg.get("standing_notes", "")
     base_url = cfg.get("base_urls", {}).get(provider) or llm_client.PROVIDERS[provider]["base_url"]
-    provider_models = llm_client.PROVIDERS[provider]["models"]
-    model = get_model_for_provider(provider)
+    provider_models, model = get_model_choices_for_provider(provider)
     model_update = gr.update(choices=provider_models, value=model)
     extra_prompt = cfg.get("extra_system_prompt", "")
     embedding_base_url = cfg.get("embedding_base_url", embedding_client.DEFAULT_EMBEDDING_BASE_URL)

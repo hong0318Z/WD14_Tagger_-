@@ -50,11 +50,9 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         model_status = gr.Markdown("")
 
         def _on_provider_change(provider):
-            info = llm_client.PROVIDERS[provider]
-            models = info["models"]
             saved_key = core.get_api_key_for_provider(provider)
             saved_url = core.get_base_url_for_provider(provider)
-            saved_model = core.get_model_for_provider(provider)
+            models, saved_model = core.get_model_choices_for_provider(provider)
             core.save_provider(provider)
             return saved_url, gr.update(choices=models, value=saved_model), saved_key
 
