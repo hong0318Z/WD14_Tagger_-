@@ -415,8 +415,9 @@ def _fmt_usage_log(steps: list) -> str:
     lines = ["", "─── 토큰/시간 로그 ───"]
     for i, (label, usage) in enumerate(steps, start=1):
         if usage:
+            cache_note = f" (캐시 {usage['cached_tokens']})" if usage.get("cached_tokens") else ""
             lines.append(
-                f"{i}. {label} - 입력 {usage['prompt_tokens']} 출력 {usage['completion_tokens']} "
+                f"{i}. {label} - 입력 {usage['prompt_tokens']}{cache_note} 출력 {usage['completion_tokens']} "
                 f"시간 {usage['elapsed']:.1f}s"
             )
         else:

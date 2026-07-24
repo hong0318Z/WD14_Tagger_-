@@ -55,11 +55,18 @@ _NON_CHAT_MODEL_MARKERS = (
 )
 
 
+def _is_google(base_url: str) -> bool:
+    return bool(base_url) and "generativelanguage.googleapis.com" in base_url
+
+
 def list_models(api_key: str, base_url: str) -> list:
     """Returns a list of model id strings available on the chat server, filtered to
     exclude obviously non-chat models (embeddings, image/audio generation, etc) so a
     provider's full catalog doesn't drown out the handful of models actually usable
     for chat completions here."""
+    if _is_google(base_url):
+        import gemini_client
+        return gemini_client.list_models(api_key, base_url)
     client = _client(api_key, base_url)
     resp = client.models.list()
     ids = sorted(m.id for m in resp.data)
@@ -99,6 +106,9 @@ def _usage_dict(usage, elapsed: float) -> dict:
 def chat(api_key: str, messages: list, temperature: float = 0.7,
          model: str = None, base_url: str = None, response_format=None) -> tuple:
     """Returns (content, usage_dict) where usage_dict has prompt_tokens/completion_tokens/elapsed."""
+    if _is_google(base_url):
+        import gemini_client
+        return gemini_client.chat(api_key, messages, temperature, model, base_url, response_format)
     model = model or DEFAULT_MODEL
     client = _client(api_key, base_url)
     started = time.time()
@@ -117,6 +127,10 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
                 model: str = None, base_url: str = None, response_format=None):
     """Yields (accumulated_text, finish_reason, usage_dict).
     usage_dict is None for mid-stream yields and populated only on the final yield."""
+    if _is_google(base_url):
+        import gemini_client
+        yield from gemini_client.chat_stream(api_key, messages, temperature, model, base_url, response_format)
+        return
     model = model or DEFAULT_MODEL
     client = _client(api_key, base_url)
     started = time.time()

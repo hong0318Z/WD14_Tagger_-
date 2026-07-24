@@ -6,3 +6,4 @@ Pillow
 numpy
 requests
 openai
+google-genai
