@@ -173,10 +173,13 @@ def save_embedding_api_key(key):
     local_config.save_config(embedding_api_key=key or "")
 
 
-def list_embedding_models(api_key, base_url):
+def list_embedding_models(api_key, base_url, current_model=None):
     try:
         models = embedding_client.list_models(api_key, base_url)
-        return gr.update(choices=models, value=models[0] if models else None), f"모델 {len(models)}개 조회됨"
+        if not models:
+            return gr.update(), "모델 목록이 비어 있습니다."
+        value = current_model if current_model in models else models[0]
+        return gr.update(choices=models, value=value), f"모델 {len(models)}개 조회됨"
     except Exception as e:
         return gr.update(), f"조회 실패: {e}"
 
@@ -261,10 +264,16 @@ def get_base_url_for_provider(provider):
     return cfg.get("base_urls", {}).get(provider) or llm_client.PROVIDERS.get(provider, {}).get("base_url", llm_client.DEFAULT_BASE_URL)
 
 
-def list_main_models(api_key, base_url):
+def list_main_models(api_key, base_url, current_model=None):
+    """Refreshes the model choices from the server. Never silently swaps out a model the
+    user already has selected/saved just because the server's catalog is huge and sorts
+    something else first - only falls back to models[0] if there's truly nothing to keep."""
     try:
         models = llm_client.list_models(api_key, base_url)
-        return gr.update(choices=models, value=models[0] if models else None), f"모델 {len(models)}개 조회됨"
+        if not models:
+            return gr.update(), f"모델 목록이 비어 있습니다."
+        value = current_model if current_model in models else models[0]
+        return gr.update(choices=models, value=value), f"모델 {len(models)}개 조회됨"
     except Exception as e:
         return gr.update(), f"조회 실패: {e}"
 

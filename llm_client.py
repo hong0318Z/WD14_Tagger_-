@@ -44,11 +44,27 @@ def trim_history(history: list) -> list:
     return history[-MAX_HISTORY_MESSAGES:]
 
 
+# Substrings that mark a model id as almost certainly NOT a text chat model (embeddings,
+# image/video/audio generation, TTS, etc). External catalogs like Google's /models mix
+# these in with hundreds of chat models; a local llama.cpp-style server normally only
+# exposes what its operator actually loaded, so this mainly protects against big
+# multi-provider catalogs, not local servers.
+_NON_CHAT_MODEL_MARKERS = (
+    "embedding", "embed-", "aqa", "imagen", "veo", "tts", "audio", "vision-only",
+    "image-generation", "moderation", "whisper", "dall-e", "clip",
+)
+
+
 def list_models(api_key: str, base_url: str) -> list:
-    """Returns a list of model id strings available on the chat server."""
+    """Returns a list of model id strings available on the chat server, filtered to
+    exclude obviously non-chat models (embeddings, image/audio generation, etc) so a
+    provider's full catalog doesn't drown out the handful of models actually usable
+    for chat completions here."""
     client = _client(api_key, base_url)
     resp = client.models.list()
-    return sorted(m.id for m in resp.data)
+    ids = sorted(m.id for m in resp.data)
+    chat_ids = [i for i in ids if not any(marker in i.lower() for marker in _NON_CHAT_MODEL_MARKERS)]
+    return chat_ids or ids
 
 
 def _client(api_key: str, base_url: str) -> OpenAI:

@@ -63,7 +63,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         )
         model_refresh_btn.click(
             core.list_main_models,
-            inputs=[api_key, base_url],
+            inputs=[api_key, base_url, model_select],
             outputs=[model_select, model_status],
         )
 
@@ -131,7 +131,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         embedding_api_key.change(core.save_embedding_api_key, inputs=embedding_api_key)
         embedding_models_refresh_btn.click(
             core.list_embedding_models,
-            inputs=[embedding_api_key, embedding_base_url],
+            inputs=[embedding_api_key, embedding_base_url, embedding_model_select],
             outputs=[embedding_model_select, embedding_models_status],
         )
         tag_db_file.change(core.load_tag_db, inputs=tag_db_file, outputs=[db_state, tag_db_status])
