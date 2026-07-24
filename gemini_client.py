@@ -120,6 +120,21 @@ def _thinking_config(enabled: bool):
     return types.ThinkingConfig(thinking_budget=-1 if enabled else 0)
 
 
+# This app's whole purpose is generating explicit adult-content danbooru tag prompts, so
+# Gemini's default safety thresholds (which block sexual-content responses outright) have
+# to be relaxed, or every multi-scene/NSFW-tag generation call comes back empty with no
+# error - just 0 output tokens - which is exactly what silently broke scene generation.
+_SAFETY_SETTINGS = [
+    types.SafetySetting(category=category, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+    for category in (
+        types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    )
+]
+
+
 def _build_config(system_text, temperature, model, api_key, client, response_format, thinking_enabled=False):
     cache_name = _get_or_create_cache(client, model, api_key, system_text)
     config_kwargs = dict(
@@ -127,6 +142,7 @@ def _build_config(system_text, temperature, model, api_key, client, response_for
         max_output_tokens=MAX_OUTPUT_TOKENS,
         http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
         thinking_config=_thinking_config(thinking_enabled),
+        safety_settings=_SAFETY_SETTINGS,
     )
     if cache_name:
         config_kwargs["cached_content"] = cache_name
@@ -135,6 +151,19 @@ def _build_config(system_text, temperature, model, api_key, client, response_for
     if response_format and response_format.get("type") == "json_object":
         config_kwargs["response_mime_type"] = "application/json"
     return types.GenerateContentConfig(**config_kwargs)
+
+
+def _blocked_error(resp_or_chunk, model: str) -> RuntimeError:
+    feedback = getattr(resp_or_chunk, "prompt_feedback", None)
+    block_reason = getattr(feedback, "block_reason", None) if feedback else None
+    candidates = getattr(resp_or_chunk, "candidates", None) or []
+    finish_reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+    safety_ratings = getattr(candidates[0], "safety_ratings", None) if candidates else None
+    return RuntimeError(
+        f"Gemini가 빈 응답을 반환했습니다 (model={model}, block_reason={block_reason}, "
+        f"finish_reason={finish_reason}). 세이프티 필터에 걸려 차단됐을 가능성이 높습니다"
+        + (f" (safety_ratings={safety_ratings})" if safety_ratings else "") + "."
+    )
 
 
 def chat(api_key: str, messages: list, temperature: float = 0.7,
@@ -158,6 +187,8 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
         resp = client.models.generate_content(model=model, contents=contents, config=config)
     elapsed = time.time() - started
     _log_usage(f"done: elapsed={elapsed:.1f}s", resp.usage_metadata)
+    if not resp.text:
+        raise _blocked_error(resp, model)
     return resp.text, _usage_dict(resp.usage_metadata, elapsed)
 
 
@@ -198,7 +229,9 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
     full = ""
     finish_reason = None
     usage_metadata = None
+    last_chunk = None
     for chunk in _stream_with_thinking_fallback(client, model, contents, config):
+        last_chunk = chunk
         if getattr(chunk, "usage_metadata", None):
             usage_metadata = chunk.usage_metadata
         delta = chunk.text or ""
@@ -211,6 +244,8 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
 
     elapsed = time.time() - started
     _log_usage(f"stream done: elapsed={elapsed:.1f}s chars={len(full)} finish_reason={finish_reason}", usage_metadata)
+    if not full:
+        raise _blocked_error(last_chunk, model)
     yield full, finish_reason, _usage_dict(usage_metadata, elapsed)
 
 
