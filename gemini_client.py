@@ -112,12 +112,21 @@ def _log_usage(prefix: str, usage_metadata) -> None:
         print(f"[gemini] {prefix} usage={usage_metadata}")
 
 
-def _build_config(system_text, temperature, model, api_key, client, response_format):
+# Thinking is OFF by default: this app's tasks (tag grouping, JSON formatting, following a
+# fixed style guide) rarely benefit from Gemini's extended reasoning, and it's pure latency/
+# token cost otherwise. thinking_budget=-1 lets the model pick its own budget dynamically
+# when a caller explicitly opts in; 0 disables it.
+def _thinking_config(enabled: bool):
+    return types.ThinkingConfig(thinking_budget=-1 if enabled else 0)
+
+
+def _build_config(system_text, temperature, model, api_key, client, response_format, thinking_enabled=False):
     cache_name = _get_or_create_cache(client, model, api_key, system_text)
     config_kwargs = dict(
         temperature=temperature,
         max_output_tokens=MAX_OUTPUT_TOKENS,
         http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+        thinking_config=_thinking_config(thinking_enabled),
     )
     if cache_name:
         config_kwargs["cached_content"] = cache_name
@@ -129,36 +138,54 @@ def _build_config(system_text, temperature, model, api_key, client, response_for
 
 
 def chat(api_key: str, messages: list, temperature: float = 0.7,
-         model: str = None, base_url: str = None, response_format=None) -> tuple:
+         model: str = None, base_url: str = None, response_format=None,
+         thinking_enabled: bool = False) -> tuple:
     model = model or DEFAULT_MODEL
     client = _client(api_key)
     system_text, contents = _split_messages(messages)
-    config = _build_config(system_text, temperature, model, api_key, client, response_format)
+    config = _build_config(system_text, temperature, model, api_key, client, response_format, thinking_enabled)
 
     started = time.time()
-    print(f"[gemini] request: model={model} messages={len(messages)} chars={sum(len(m['content']) for m in messages)}")
-    resp = client.models.generate_content(model=model, contents=contents, config=config)
+    print(f"[gemini] request: model={model} thinking={thinking_enabled} messages={len(messages)} chars={sum(len(m['content']) for m in messages)}")
+    try:
+        resp = client.models.generate_content(model=model, contents=contents, config=config)
+    except Exception as e:
+        # some models don't support thinking_budget=0 (thinking can't be fully disabled) -
+        # retry once without forcing a thinking_config rather than hard-failing the request.
+        if "thinking" not in str(e).lower():
+            raise
+        config.thinking_config = None
+        resp = client.models.generate_content(model=model, contents=contents, config=config)
     elapsed = time.time() - started
     _log_usage(f"done: elapsed={elapsed:.1f}s", resp.usage_metadata)
     return resp.text, _usage_dict(resp.usage_metadata, elapsed)
 
 
 def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
-                model: str = None, base_url: str = None, response_format=None):
+                model: str = None, base_url: str = None, response_format=None,
+                thinking_enabled: bool = False):
     """Yields (accumulated_text, finish_reason, usage_dict), matching llm_client.chat_stream's
     contract so core.py can treat both providers identically."""
     model = model or DEFAULT_MODEL
     client = _client(api_key)
     system_text, contents = _split_messages(messages)
-    config = _build_config(system_text, temperature, model, api_key, client, response_format)
+    config = _build_config(system_text, temperature, model, api_key, client, response_format, thinking_enabled)
 
     started = time.time()
-    print(f"[gemini] stream: model={model} messages={len(messages)} chars={sum(len(m['content']) for m in messages)}")
+    print(f"[gemini] stream: model={model} thinking={thinking_enabled} messages={len(messages)} chars={sum(len(m['content']) for m in messages)}")
 
     full = ""
     finish_reason = None
     usage_metadata = None
-    for chunk in client.models.generate_content_stream(model=model, contents=contents, config=config):
+    try:
+        stream_ctx = client.models.generate_content_stream(model=model, contents=contents, config=config)
+    except Exception as e:
+        if "thinking" not in str(e).lower():
+            raise
+        config.thinking_config = None
+        stream_ctx = client.models.generate_content_stream(model=model, contents=contents, config=config)
+
+    for chunk in stream_ctx:
         if getattr(chunk, "usage_metadata", None):
             usage_metadata = chunk.usage_metadata
         delta = chunk.text or ""

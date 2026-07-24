@@ -114,6 +114,10 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             use_db_reference = gr.Checkbox(
                 label="DB 참조 (임베딩 검색, 컨텍스트 누적 중 같은 구도 전개 시 끌 수 있음)", value=True
             )
+            gemini_thinking = gr.Checkbox(
+                label="Gemini 추론(Thinking) 사용 (기본 꺼짐 - Google 프로바이더에만 적용, 켜면 느려지고 토큰이 늘어남)",
+                value=False,
+            )
             clear_history_btn = gr.Button("대화 기록 초기화", size="sm")
             history_status = gr.Markdown("")
 
@@ -154,6 +158,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         combo_btn = gr.Button("태그 조합 생성", variant="primary")
         combo_tags = gr.Textbox(label="결과 태그 (복사해서 사용)", lines=6)
         combo_explanation = gr.Textbox(label="설명 (한국어)", lines=4)
+        combo_send_to_chat_btn = gr.Button("이 결과로 4번 탭(AI 대화)에서 계속하기 →", size="sm")
         combo_debug = gr.Textbox(label="검색된 후보 태그 (디버그)", lines=10)
 
         gr.Markdown("(요청 입력란에서 Ctrl+Enter로 마우스 없이 생성)")
@@ -162,7 +167,8 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             fn=core.generate_tag_combo,
             inputs=[api_key, combo_request, db_state, combo_variant_count, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
-                    embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference],
+                    embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference,
+                    gemini_thinking],
             outputs=[combo_tags, combo_explanation, combo_debug, history_state],
         )
 
@@ -218,7 +224,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         asset_btn.click(
             core.generate_asset_output,
             inputs=[api_key, asset_mode, asset_chars, asset_input, history_state, accumulate_context,
-                    model_select, base_url, extra_system_prompt],
+                    model_select, base_url, extra_system_prompt, gemini_thinking],
             outputs=[asset_output, history_state],
         )
 
@@ -254,6 +260,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         series_status = gr.Markdown("")
         series_output = gr.Code(label="결과 JSON (NAI 프리셋에 붙여넣기)", language="json", lines=25)
         series_download = gr.DownloadButton(label="JSON 파일 다운로드", visible=False)
+        series_send_to_chat_btn = gr.Button("이 결과로 4번 탭(AI 대화)에서 계속하기 →", size="sm")
         series_debug = gr.Textbox(label="디버그 (후보 태그 / AI 원본 응답)", lines=15)
 
         gr.Markdown("(시리즈 설명 입력란에서 Ctrl+Enter로 마우스 없이 생성)")
@@ -264,7 +271,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference,
                     series_fixed_reference, series_flexible_reference, series_scene_list,
-                    series_negative_prompt, series_width, series_height],
+                    series_negative_prompt, series_width, series_height, gemini_thinking],
             outputs=[series_output, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,
@@ -295,32 +302,42 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
 
     with gr.Tab("4. AI 대화 / 편집"):
         gr.Markdown(
-            "프롬프트나 JSON을 베이스로 붙여넣고 AI와 자유롭게 대화·수정하세요.\n"
-            "베이스 없이도 일반 질의/논의가 가능합니다."
+            "### 💬 AI 대화\n"
+            "다른 탭에서 만든 결과를 베이스로 붙여넣거나 \"이 결과로 계속하기\" 버튼으로 가져와서, "
+            "대화하듯 다듬으세요. 베이스 없이도 자유 질의가 가능합니다.\n\n"
+            "**바로 되는 것**: *\"아까 한 것의 바리에이션 3개 만들어줘\"* (변형 생성) · "
+            "*\"표정만 바꿔줘\"* (그 부분만 수정, 나머지는 그대로 유지)"
         )
-        with gr.Row():
+        with gr.Row(equal_height=True):
             with gr.Column(scale=1):
-                base_content = gr.Textbox(
-                    label="베이스 콘텐츠 (기존 태그 프롬프트 또는 JSON, 선택사항)",
-                    lines=18,
-                    placeholder="여기에 기존 프롬프트나 NAIS JSON을 붙여넣으면 AI가 참고합니다.",
-                )
-                clear_base_btn = gr.Button("베이스 초기화", size="sm")
+                with gr.Group():
+                    base_content = gr.Textbox(
+                        label="📋 베이스 콘텐츠",
+                        lines=16,
+                        placeholder="다른 탭에서 \"이 결과로 계속하기\"를 누르거나, "
+                                     "기존 프롬프트/NAIS JSON을 직접 붙여넣으면 AI가 참고합니다.",
+                    )
+                    with gr.Row():
+                        clear_base_btn = gr.Button("베이스 비우기", size="sm")
             with gr.Column(scale=2):
-                chat_display = gr.Chatbot(label="대화", height=450)
+                chat_display = gr.Chatbot(label="대화", height=420, show_copy_button=True, avatar_images=(None, None))
+                with gr.Row():
+                    quick_variation_btn = gr.Button("🔀 바리에이션 3개", size="sm")
+                    quick_edit_btn = gr.Button("✏️ 특정 부분만 수정...", size="sm")
                 chat_input = gr.Textbox(
-                    label="메시지 (Enter로 전송)",
-                    placeholder="예: 이 JSON에 씬 3개 추가해줘 / 이 프롬프트를 더 자세하게 만들어줘",
+                    label="메시지 (Enter로 전송, Shift+Enter로 줄바꿈)",
+                    placeholder="예: 이 JSON에 씬 3개 추가해줘 / 아까 한 것의 바리에이션 만들어줘 / 표정만 바꿔줘",
                     lines=2,
                 )
                 with gr.Row():
-                    chat_send_btn = gr.Button("전송", variant="primary", scale=3)
+                    chat_send_btn = gr.Button("전송", variant="primary", scale=4)
                     chat_clear_btn = gr.Button("대화 초기화", scale=1)
 
-        chat_response = gr.Textbox(label="최근 AI 응답 (복사용)", lines=8)
+        with gr.Accordion("최근 AI 응답 (복사용 텍스트 보기)", open=False):
+            chat_response = gr.Textbox(label="", lines=8, show_label=False)
 
         def _chat_send(api_key_val, base_url_val, model_val, user_msg, base_cont,
-                       notes_val, extra_prompt_val, chatbot_history, history_val, accumulate_val):
+                       notes_val, extra_prompt_val, chatbot_history, history_val, accumulate_val, thinking_val):
             if not user_msg or not user_msg.strip():
                 yield chatbot_history, "", history_val
                 return
@@ -332,55 +349,68 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             new_history = history_val
             for response, new_history in core.chat_with_context(
                 api_key_val, base_url_val, model_val, user_msg, base_cont,
-                notes_val, history_val, accumulate_val, extra_prompt_val,
+                notes_val, history_val, accumulate_val, extra_prompt_val, thinking_val,
             ):
                 display = list(new_display) + [{"role": "assistant", "content": response}]
                 yield display, response, new_history
 
+        _chat_inputs = [api_key, base_url, model_select, chat_input, base_content,
+                        standing_notes, extra_system_prompt, chat_display, history_state,
+                        accumulate_context, gemini_thinking]
+
         chat_send_btn.click(
-            _chat_send,
-            inputs=[api_key, base_url, model_select, chat_input, base_content,
-                    standing_notes, extra_system_prompt, chat_display, history_state, accumulate_context],
-            outputs=[chat_display, chat_response, history_state],
+            _chat_send, inputs=_chat_inputs, outputs=[chat_display, chat_response, history_state],
         ).then(lambda: "", outputs=chat_input)
 
         chat_input.submit(
-            _chat_send,
-            inputs=[api_key, base_url, model_select, chat_input, base_content,
-                    standing_notes, extra_system_prompt, chat_display, history_state, accumulate_context],
-            outputs=[chat_display, chat_response, history_state],
+            _chat_send, inputs=_chat_inputs, outputs=[chat_display, chat_response, history_state],
         ).then(lambda: "", outputs=chat_input)
+
+        quick_variation_btn.click(lambda: "아까 한 것의 바리에이션 3개 만들어줘", outputs=chat_input)
+        quick_edit_btn.click(lambda: "아까 한 것에서 ", outputs=chat_input)
 
         chat_clear_btn.click(lambda: ([], ""), outputs=[chat_display, chat_response])
         clear_base_btn.click(lambda: "", outputs=base_content)
 
-        gr.Markdown(
-            "---\n#### 씬 목록 → 지침 생성\n"
-            "기존에 정리한 목록(태그/JSON 등)과 씬 이름 리스트를 주면, AI가 그 안의 명명/구조 규칙을 분석해서 "
-            "앞으로의 모든 생성 프롬프트에 계속 상주시킬 영어 지침으로 정리해줍니다."
-        )
-        with gr.Row():
-            guideline_existing_list = gr.Textbox(
-                label="기존에 정리한 목록 (태그 조합, JSON 등 붙여넣기)", lines=8, scale=1,
+        with gr.Accordion("🛠 씬 목록 → 지침 생성 (부가 기능)", open=False):
+            gr.Markdown(
+                "기존에 정리한 목록(태그/JSON 등)과 씬 이름 리스트를 주면, AI가 그 안의 명명/구조 규칙을 분석해서 "
+                "앞으로의 모든 생성 프롬프트에 계속 상주시킬 영어 지침으로 정리해줍니다."
             )
-            guideline_scene_names = gr.Textbox(
-                label="씬 이름 리스트", lines=8, scale=1,
-                placeholder="m_com_1\nm_com_2\nm_sex_4\n...",
-            )
-        guideline_btn = gr.Button("지침 생성 (영어)")
-        guideline_status = gr.Markdown("")
-        guideline_output = gr.Textbox(label="생성된 지침 (영어, 수정 가능)", lines=10)
-        guideline_apply_btn = gr.Button("고정 지시사항에 추가", variant="primary")
+            with gr.Row():
+                guideline_existing_list = gr.Textbox(
+                    label="기존에 정리한 목록 (태그 조합, JSON 등 붙여넣기)", lines=8, scale=1,
+                )
+                guideline_scene_names = gr.Textbox(
+                    label="씬 이름 리스트", lines=8, scale=1,
+                    placeholder="m_com_1\nm_com_2\nm_sex_4\n...",
+                )
+            guideline_btn = gr.Button("지침 생성 (영어)")
+            guideline_status = gr.Markdown("")
+            guideline_output = gr.Textbox(label="생성된 지침 (영어, 수정 가능)", lines=10)
+            guideline_apply_btn = gr.Button("고정 지시사항에 추가", variant="primary")
 
-        guideline_btn.click(
-            core.generate_scene_guideline,
-            inputs=[api_key, guideline_existing_list, guideline_scene_names, model_select, base_url, extra_system_prompt],
-            outputs=[guideline_output, guideline_status],
+            guideline_btn.click(
+                core.generate_scene_guideline,
+                inputs=[api_key, guideline_existing_list, guideline_scene_names, model_select, base_url,
+                        extra_system_prompt, gemini_thinking],
+                outputs=[guideline_output, guideline_status],
+            )
+            guideline_apply_btn.click(
+                core.append_to_standing_notes,
+                inputs=[guideline_output, standing_notes],
+                outputs=[standing_notes, guideline_status],
+            )
+
+        combo_send_to_chat_btn.click(
+            lambda tags, expl: (tags or "") + (f"\n\n{expl}" if expl and expl.strip() else ""),
+            inputs=[combo_tags, combo_explanation],
+            outputs=base_content,
         )
-        guideline_apply_btn.click(
-            core.append_to_standing_notes,
-            inputs=[guideline_output, standing_notes],
-            outputs=[standing_notes, guideline_status],
+        series_send_to_chat_btn.click(
+            lambda json_text: (json_text or "", "이 결과로 4번 탭(AI 대화)에서 계속하기 → 베이스 콘텐츠로 가져왔습니다."),
+            inputs=[series_output],
+            outputs=[base_content, series_status],
         )
 
     with gr.Tab("5. JSON 통합"):

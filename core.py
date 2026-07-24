@@ -478,7 +478,8 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
                         standing_notes: str = "", history: list = None, accumulate: bool = False,
                         model: str = None, base_url: str = None, extra_system_prompt: str = "",
                         embedding_base_url: str = None, embedding_model: str = None,
-                        embedding_api_key: str = None, use_db_reference: bool = True):
+                        embedding_api_key: str = None, use_db_reference: bool = True,
+                        gemini_thinking: bool = False):
     history = history or []
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", "", history
@@ -488,12 +489,12 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference)
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, gemini_thinking)
     except Exception as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True):
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, gemini_thinking=False):
     usage_embed = None
     if use_db_reference:
         # Step 1: embedding-based semantic search for candidate tags (no LLM call)
@@ -535,7 +536,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
 
     raw_final, usage2 = llm_client.chat(
         api_key, step2_messages, temperature=0.8,
-        model=model, base_url=base_url,
+        model=model, base_url=base_url, gemini_thinking=gemini_thinking,
     )
     final_json_part = raw_final.strip()
     if final_json_part.startswith("```"):
@@ -662,7 +663,8 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           embedding_api_key: str = None, use_db_reference: bool = True,
                           fixed_reference: str = "", flexible_reference: str = "",
                           scene_list: str = "", negative_prompt: str = "",
-                          scene_width: int = None, scene_height: int = None):
+                          scene_width: int = None, scene_height: int = None,
+                          gemini_thinking: bool = False):
     history = history or []
     has_description = bool(description and description.strip())
     has_scene_list = bool(scene_list and scene_list.strip())
@@ -671,13 +673,13 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference, scene_list, negative_prompt, scene_width, scene_height):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference, scene_list, negative_prompt, scene_width, scene_height, gemini_thinking):
             yield item
     except Exception as e:
         yield "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference="", scene_list="", negative_prompt="", scene_width=None, scene_height=None):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference="", scene_list="", negative_prompt="", scene_width=None, scene_height=None, gemini_thinking=False):
     candidates_text = (
         "(DB 참조 비활성화됨 - 컨텍스트의 이전 태그를 참고하세요)" if not use_db_reference
         else "(태그 DB가 업로드되지 않았습니다)"
@@ -751,7 +753,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     finish_reason = None
     usage_json = None
     for raw, finish_reason, usage_json in llm_client.chat_stream(
-        api_key, messages, temperature=0.8, model=model, base_url=base_url,
+        api_key, messages, temperature=0.8, model=model, base_url=base_url, gemini_thinking=gemini_thinking,
     ):
         debug_info = "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON, 생성 중) ---\n" + raw
         yield raw, "JSON 생성 중...", debug_info, history
@@ -866,18 +868,19 @@ MODE_TRIGGERS = {
 
 
 def generate_asset_output(api_key, mode_label, char_def, user_input, history: list = None, accumulate: bool = False,
-                           model: str = None, base_url: str = None, extra_system_prompt: str = ""):
+                           model: str = None, base_url: str = None, extra_system_prompt: str = "",
+                           gemini_thinking: bool = False):
     history = history or []
     if not user_input or not user_input.strip():
         return "내용을 입력해주세요.", history
 
     try:
-        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt)
+        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt, gemini_thinking)
     except Exception as e:
         return f"오류 발생: {e}", history
 
 
-def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt=""):
+def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt="", gemini_thinking=False):
     trigger = MODE_TRIGGERS[mode_label]
     user_content = trigger
     if char_def and char_def.strip():
@@ -889,7 +892,7 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
         messages += llm_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
 
-    result, usage = llm_client.chat(api_key, messages, temperature=0.7, model=model, base_url=base_url)
+    result, usage = llm_client.chat(api_key, messages, temperature=0.7, model=model, base_url=base_url, gemini_thinking=gemini_thinking)
 
     new_history = history
     if accumulate:
@@ -909,9 +912,23 @@ def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, hist
 
 CHAT_SYSTEM_PROMPT = """You are a helpful AI assistant for a NovelAI image generation workflow.
 Help the user discuss, refine, or generate image prompts, tags, and NAIS JSON presets.
-When producing prompts or tags, use English danbooru-style tags grouped in {} braces.
-When producing or editing NAIS JSON, follow the established schema exactly (id, name, scenes[]).
-All conversational replies and explanations should be in Korean unless the user asks otherwise."""
+When producing prompts or tags, use English danbooru-style tags grouped in {} braces, following the \
+PROMPT GROUPING RULES the user's other tools use (quality, background, composition, then one nested outer \
+group per character wrapping that character's appearance+action, clothing, then expression/effects last).
+When producing or editing NAIS JSON, follow the established schema exactly: \
+{"version": 1, "scenes": [{"name", "prompt", "negativePrompt", "width", "height"}]}.
+All conversational replies and explanations should be in Korean unless the user asks otherwise.
+
+CONVERSATIONAL MODES - the user may ask for these mid-chat, referring back to something earlier in this \
+conversation or in the [베이스 콘텐츠] block:
+- VARIATION REQUEST (e.g. "아까 한 것의 바리에이션 만들어줘", "변형 몇 개 더"): generate multiple distinct \
+variations of the referenced prompt/scene/tag-combo in one reply, each clearly labeled (variant 1, variant 2, \
+...). Vary pose/expression/composition/wording meaningfully between variants rather than trivial rewording. \
+If the user gives a count, produce exactly that many; otherwise default to 3.
+- TARGETED EDIT REQUEST (e.g. "아까 한 것에서 표정만 바꿔줘", "이 부분만 수정해줘"): do NOT regenerate \
+everything from scratch. Return the full previous content again but with ONLY the specifically requested part \
+changed - every other tag, group, scene, or field must stay byte-for-byte identical to before. Briefly note in \
+Korean (outside the content itself) what you changed."""
 
 
 GUIDELINE_SYSTEM_PROMPT = """You analyze an existing list of NAI/danbooru scene prompts or presets and a list of \
@@ -933,7 +950,8 @@ no preamble, no explanation of what you did."""
 
 
 def generate_scene_guideline(api_key: str, existing_list: str, scene_names: str,
-                              model: str = None, base_url: str = None, extra_system_prompt: str = ""):
+                              model: str = None, base_url: str = None, extra_system_prompt: str = "",
+                              gemini_thinking: bool = False):
     """Analyzes a pasted list of existing scenes/tags + scene names and distills them into a reusable
     English standing-instruction block, so future generations follow the same conventions without needing
     the original examples in every prompt again."""
@@ -950,7 +968,7 @@ def generate_scene_guideline(api_key: str, existing_list: str, scene_names: str,
     messages.append({"role": "user", "content": user_content})
 
     try:
-        result, usage = llm_client.chat(api_key, messages, temperature=0.3, model=model, base_url=base_url)
+        result, usage = llm_client.chat(api_key, messages, temperature=0.3, model=model, base_url=base_url, gemini_thinking=gemini_thinking)
         return result, "지침 생성 완료" + _fmt_usage_log([("지침 생성", usage)])
     except Exception as e:
         return "", f"오류 발생: {e}"
@@ -967,7 +985,7 @@ def append_to_standing_notes(guideline: str, current_notes: str):
 def chat_with_context(api_key: str, base_url: str, model: str,
                       user_message: str, base_content: str,
                       standing_notes: str, history: list, accumulate: bool,
-                      extra_system_prompt: str = ""):
+                      extra_system_prompt: str = "", gemini_thinking: bool = False):
     """Free-form chat with AI. Generator yielding (response_text, new_history)."""
     if not user_message or not user_message.strip():
         yield "메시지를 입력해주세요.", history
@@ -990,7 +1008,7 @@ def chat_with_context(api_key: str, base_url: str, model: str,
     try:
         response = ""
         usage = None
-        for response, _, usage in llm_client.chat_stream(api_key, messages, temperature=0.7, model=model, base_url=base_url):
+        for response, _, usage in llm_client.chat_stream(api_key, messages, temperature=0.7, model=model, base_url=base_url, gemini_thinking=gemini_thinking):
             yield response, history
 
         new_history = history

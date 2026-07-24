@@ -104,11 +104,13 @@ def _usage_dict(usage, elapsed: float) -> dict:
 
 
 def chat(api_key: str, messages: list, temperature: float = 0.7,
-         model: str = None, base_url: str = None, response_format=None) -> tuple:
-    """Returns (content, usage_dict) where usage_dict has prompt_tokens/completion_tokens/elapsed."""
+         model: str = None, base_url: str = None, response_format=None,
+         gemini_thinking: bool = False) -> tuple:
+    """Returns (content, usage_dict) where usage_dict has prompt_tokens/completion_tokens/elapsed.
+    gemini_thinking only applies when routed to Google - ignored for every other provider."""
     if _is_google(base_url):
         import gemini_client
-        return gemini_client.chat(api_key, messages, temperature, model, base_url, response_format)
+        return gemini_client.chat(api_key, messages, temperature, model, base_url, response_format, gemini_thinking)
     model = model or DEFAULT_MODEL
     client = _client(api_key, base_url)
     started = time.time()
@@ -131,12 +133,14 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
 
 
 def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
-                model: str = None, base_url: str = None, response_format=None):
+                model: str = None, base_url: str = None, response_format=None,
+                gemini_thinking: bool = False):
     """Yields (accumulated_text, finish_reason, usage_dict).
-    usage_dict is None for mid-stream yields and populated only on the final yield."""
+    usage_dict is None for mid-stream yields and populated only on the final yield.
+    gemini_thinking only applies when routed to Google - ignored for every other provider."""
     if _is_google(base_url):
         import gemini_client
-        yield from gemini_client.chat_stream(api_key, messages, temperature, model, base_url, response_format)
+        yield from gemini_client.chat_stream(api_key, messages, temperature, model, base_url, response_format, gemini_thinking)
         return
     model = model or DEFAULT_MODEL
     client = _client(api_key, base_url)
