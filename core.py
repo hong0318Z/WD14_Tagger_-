@@ -131,7 +131,6 @@ def save_api_key_for_provider(key, provider):
     api_keys = cfg.get("api_keys", {})
     api_keys[provider] = key or ""
     local_config.save_config(api_keys=api_keys)
-    return key
 
 
 def save_provider(provider):
@@ -146,7 +145,6 @@ def save_model_for_provider(model, provider):
     models_by_provider = cfg.get("models", {})
     models_by_provider[provider] = model or ""
     local_config.save_config(models=models_by_provider)
-    return model
 
 
 def get_model_for_provider(provider):
@@ -290,7 +288,6 @@ def list_main_models(api_key, base_url, current_model=None):
 
 def save_notes(notes):
     local_config.save_config(standing_notes=notes or "")
-    return notes
 
 
 SERIES_DRAFT_FIELDS = ["chars", "fixed_reference", "flexible_reference", "description", "scene_list", "negative_prompt"]
