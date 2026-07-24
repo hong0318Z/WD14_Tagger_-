@@ -118,6 +118,13 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
         kwargs["response_format"] = response_format
     resp = client.chat.completions.create(**kwargs)
     elapsed = time.time() - started
+    if not resp.choices or resp.choices[0].message is None or resp.choices[0].message.content is None:
+        finish_reason = resp.choices[0].finish_reason if resp.choices else None
+        raise RuntimeError(
+            f"모델이 빈 응답을 반환했습니다 (model={model}, finish_reason={finish_reason}). "
+            f"컨텍스트가 너무 길거나(max_tokens={MAX_TOKENS}), 이 서버/모델이 이 요청 형식을 "
+            f"지원하지 않을 수 있습니다. raw={resp}"
+        )
     content = resp.choices[0].message.content
     _log_usage(f"done: elapsed={elapsed:.1f}s", resp.usage)
     return content, _usage_dict(resp.usage, elapsed)
@@ -157,7 +164,7 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
-            delta = choice.delta.content or ""
+            delta = (choice.delta.content if choice.delta is not None else None) or ""
             if delta:
                 full += delta
                 yield full, None, None
@@ -166,4 +173,10 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
 
     elapsed = time.time() - started
     _log_usage(f"stream done: elapsed={elapsed:.1f}s chars={len(full)} finish_reason={finish_reason}", usage)
+    if not full:
+        raise RuntimeError(
+            f"모델이 빈 응답을 반환했습니다 (model={model}, finish_reason={finish_reason}). "
+            f"컨텍스트가 너무 길거나(max_tokens={MAX_TOKENS}), 이 서버/모델이 스트리밍 요청 형식을 "
+            f"지원하지 않을 수 있습니다."
+        )
     yield full, finish_reason, _usage_dict(usage, elapsed)
