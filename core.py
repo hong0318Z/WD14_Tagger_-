@@ -290,6 +290,30 @@ def save_notes(notes):
     local_config.save_config(standing_notes=notes or "")
 
 
+def get_base_prompt(key, default):
+    """Returns the user's saved override of a tab's base system prompt, or the built-in
+    default if they haven't edited it (or cleared it back to empty)."""
+    cfg = local_config.load_config()
+    saved = cfg.get("base_prompts", {}).get(key)
+    return saved if saved and saved.strip() else default
+
+
+def save_base_prompt(value, key):
+    cfg = local_config.load_config()
+    base_prompts = cfg.get("base_prompts", {})
+    base_prompts[key] = value or ""
+    local_config.save_config(base_prompts=base_prompts)
+    return value
+
+
+def reset_base_prompt(key, default):
+    cfg = local_config.load_config()
+    base_prompts = cfg.get("base_prompts", {})
+    base_prompts.pop(key, None)
+    local_config.save_config(base_prompts=base_prompts)
+    return default, f"기본값으로 초기화했습니다."
+
+
 SERIES_DRAFT_FIELDS = ["chars", "fixed_reference", "flexible_reference", "description", "scene_list", "negative_prompt"]
 
 
@@ -476,7 +500,7 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
                         model: str = None, base_url: str = None, extra_system_prompt: str = "",
                         embedding_base_url: str = None, embedding_model: str = None,
                         embedding_api_key: str = None, use_db_reference: bool = True,
-                        gemini_thinking: bool = False):
+                        gemini_thinking: bool = False, base_prompt: str = None):
     history = history or []
     if not user_request or not user_request.strip():
         return "", "요청 내용을 입력해주세요.", "", history
@@ -486,12 +510,12 @@ def generate_tag_combo(api_key, user_request, db: TagDB, variant_count: int,
     variant_count = max(1, min(int(variant_count or 1), 5))
 
     try:
-        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, gemini_thinking)
+        return _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, gemini_thinking, base_prompt)
     except Exception as e:
         return "", "", f"오류 발생: {e}", history
 
 
-def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, gemini_thinking=False):
+def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, gemini_thinking=False, base_prompt=None):
     usage_embed = None
     if use_db_reference:
         # Step 1: embedding-based semantic search for candidate tags (no LLM call)
@@ -525,7 +549,7 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
             f"\n\nSTANDING INSTRUCTIONS / CORRECTIONS (always follow these, "
             f"they fix things the AI previously got wrong):\n{standing_notes.strip()}"
         )
-    step2_messages = [{"role": "system", "content": _sys(FINAL_SYSTEM_PROMPT, extra_system_prompt)}]
+    step2_messages = [{"role": "system", "content": _sys(base_prompt or FINAL_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
         step2_messages += llm_client.trim_history(history)
     step2_messages.append({"role": "user", "content": step_user_content})
@@ -661,7 +685,7 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           fixed_reference: str = "", flexible_reference: str = "",
                           scene_list: str = "", negative_prompt: str = "",
                           scene_width: int = None, scene_height: int = None,
-                          gemini_thinking: bool = False):
+                          gemini_thinking: bool = False, base_prompt: str = None):
     history = history or []
     has_description = bool(description and description.strip())
     has_scene_list = bool(scene_list and scene_list.strip())
@@ -670,13 +694,13 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference, scene_list, negative_prompt, scene_width, scene_height, gemini_thinking):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference, scene_list, negative_prompt, scene_width, scene_height, gemini_thinking, base_prompt):
             yield item
     except Exception as e:
         yield "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference="", scene_list="", negative_prompt="", scene_width=None, scene_height=None, gemini_thinking=False):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference="", scene_list="", negative_prompt="", scene_width=None, scene_height=None, gemini_thinking=False, base_prompt=None):
     candidates_text = (
         "(DB 참조 비활성화됨 - 컨텍스트의 이전 태그를 참고하세요)" if not use_db_reference
         else "(태그 DB가 업로드되지 않았습니다)"
@@ -741,7 +765,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     elif not scene_pairs:
         user_content += "Series description: (none given - use the explicit scene list above)"
 
-    messages = [{"role": "system", "content": _sys(MULTI_SCENE_SYSTEM_PROMPT, extra_system_prompt)}]
+    messages = [{"role": "system", "content": _sys(base_prompt or MULTI_SCENE_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
         messages += llm_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
@@ -866,25 +890,25 @@ MODE_TRIGGERS = {
 
 def generate_asset_output(api_key, mode_label, char_def, user_input, history: list = None, accumulate: bool = False,
                            model: str = None, base_url: str = None, extra_system_prompt: str = "",
-                           gemini_thinking: bool = False):
+                           gemini_thinking: bool = False, base_prompt: str = None):
     history = history or []
     if not user_input or not user_input.strip():
         return "내용을 입력해주세요.", history
 
     try:
-        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt, gemini_thinking)
+        return _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt, gemini_thinking, base_prompt)
     except Exception as e:
         return f"오류 발생: {e}", history
 
 
-def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt="", gemini_thinking=False):
+def _generate_asset_output_inner(api_key, mode_label, char_def, user_input, history, accumulate, model, base_url, extra_system_prompt="", gemini_thinking=False, base_prompt=None):
     trigger = MODE_TRIGGERS[mode_label]
     user_content = trigger
     if char_def and char_def.strip():
         user_content += f"\n\nCHARS: {char_def.strip()}"
     user_content += f"\n\n{user_input.strip()}"
 
-    messages = [{"role": "system", "content": _sys(ASSET_SYSTEM_PROMPT, extra_system_prompt)}]
+    messages = [{"role": "system", "content": _sys(base_prompt or ASSET_SYSTEM_PROMPT, extra_system_prompt)}]
     if accumulate:
         messages += llm_client.trim_history(history)
     messages.append({"role": "user", "content": user_content})
@@ -946,9 +970,21 @@ Output ONLY the instruction block in English, formatted as short imperative bull
 no preamble, no explanation of what you did."""
 
 
+# Lets each tab's base system prompt be viewed/edited directly in the UI (as opposed to
+# only being appendable via standing_notes/extra_system_prompt) - keys match the labels
+# used by get_base_prompt()/save_base_prompt() and the corresponding UI textbox.
+BASE_PROMPT_DEFAULTS = {
+    "tag_combo": FINAL_SYSTEM_PROMPT,
+    "multi_scene": MULTI_SCENE_SYSTEM_PROMPT,
+    "asset": ASSET_SYSTEM_PROMPT,
+    "chat": CHAT_SYSTEM_PROMPT,
+    "guideline": GUIDELINE_SYSTEM_PROMPT,
+}
+
+
 def generate_scene_guideline(api_key: str, existing_list: str, scene_names: str,
                               model: str = None, base_url: str = None, extra_system_prompt: str = "",
-                              gemini_thinking: bool = False):
+                              gemini_thinking: bool = False, base_prompt: str = None):
     """Analyzes a pasted list of existing scenes/tags + scene names and distills them into a reusable
     English standing-instruction block, so future generations follow the same conventions without needing
     the original examples in every prompt again."""
@@ -961,7 +997,7 @@ def generate_scene_guideline(api_key: str, existing_list: str, scene_names: str,
     if scene_names and scene_names.strip():
         user_content += f"Scene name list:\n{scene_names.strip()}"
 
-    messages = [{"role": "system", "content": _sys(GUIDELINE_SYSTEM_PROMPT, extra_system_prompt)}]
+    messages = [{"role": "system", "content": _sys(base_prompt or GUIDELINE_SYSTEM_PROMPT, extra_system_prompt)}]
     messages.append({"role": "user", "content": user_content})
 
     try:
@@ -982,13 +1018,14 @@ def append_to_standing_notes(guideline: str, current_notes: str):
 def chat_with_context(api_key: str, base_url: str, model: str,
                       user_message: str, base_content: str,
                       standing_notes: str, history: list, accumulate: bool,
-                      extra_system_prompt: str = "", gemini_thinking: bool = False):
+                      extra_system_prompt: str = "", gemini_thinking: bool = False,
+                      base_prompt: str = None):
     """Free-form chat with AI. Generator yielding (response_text, new_history)."""
     if not user_message or not user_message.strip():
         yield "메시지를 입력해주세요.", history
         return
 
-    system_content = _sys(CHAT_SYSTEM_PROMPT, extra_system_prompt)
+    system_content = _sys(base_prompt or CHAT_SYSTEM_PROMPT, extra_system_prompt)
     if standing_notes and standing_notes.strip():
         system_content += f"\n\nSTANDING INSTRUCTIONS:\n{standing_notes.strip()}"
 

@@ -10,6 +10,23 @@ import llm_client
 import presets as preset_store
 from tag_db import TagDB
 
+def _base_prompt_editor(key, label):
+    """An accordion exposing a tab's real system prompt (what's actually sent to the AI)
+    for direct viewing/editing, instead of only being appendable via standing_notes/
+    extra_system_prompt. Edits are saved and persist across restarts. Returns the textbox
+    to pass as that tab's `base_prompt` input."""
+    default = core.BASE_PROMPT_DEFAULTS[key]
+    with gr.Accordion(f"🔧 {label} 기본 프롬프트 보기/수정 (영어, 고급)", open=False):
+        gr.Markdown("AI에게 실제로 전달되는 시스템 지침입니다. 직접 보고 내용을 추가/수정하세요 - 저장되어 유지됩니다.")
+        box = gr.Textbox(value=core.get_base_prompt(key, default), lines=16, show_label=False)
+        with gr.Row():
+            reset_btn = gr.Button("기본값으로 초기화", size="sm")
+            prompt_status = gr.Markdown("")
+        box.change(lambda v, k=key: core.save_base_prompt(v, k), inputs=box)
+        reset_btn.click(lambda k=key, d=default: core.reset_base_prompt(k, d), outputs=[box, prompt_status])
+    return box
+
+
 with gr.Blocks(title="NAI Prompt Generator") as demo:
     gr.Markdown(
         "# NAI Prompt Generator\n"
@@ -153,6 +170,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
 
     with gr.Tab("1. 태그 조합 생성"):
         gr.Markdown("자연어로 원하는 이미지를 설명하면 AI가 태그를 조합합니다.")
+        combo_base_prompt = _base_prompt_editor("tag_combo", "태그 조합")
         combo_request = gr.Textbox(label="요청 내용 (한국어 가능)", lines=4)
         combo_variant_count = gr.Slider(1, 5, value=1, step=1, label="생성 개수 (variants)")
         combo_btn = gr.Button("태그 조합 생성", variant="primary")
@@ -168,7 +186,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             inputs=[api_key, combo_request, db_state, combo_variant_count, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference,
-                    gemini_thinking],
+                    gemini_thinking, combo_base_prompt],
             outputs=[combo_tags, combo_explanation, combo_debug, history_state],
         )
 
@@ -211,6 +229,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
 
     with gr.Tab("2. 에셋 네이밍 · 가이드"):
         gr.Markdown("파일명 정의 / 씬 프롬프트 / 에셋 가이드 작성을 한 곳에서 - 시리즈 생성 전 기획 단계로 활용하세요.")
+        asset_base_prompt = _base_prompt_editor("asset", "에셋 네이밍/가이드")
         asset_mode = gr.Radio(
             choices=list(core.MODE_TRIGGERS.keys()),
             value=list(core.MODE_TRIGGERS.keys())[1],
@@ -224,12 +243,13 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         asset_btn.click(
             core.generate_asset_output,
             inputs=[api_key, asset_mode, asset_chars, asset_input, history_state, accumulate_context,
-                    model_select, base_url, extra_system_prompt, gemini_thinking],
+                    model_select, base_url, extra_system_prompt, gemini_thinking, asset_base_prompt],
             outputs=[asset_output, history_state],
         )
 
     with gr.Tab("3. 다중 씬(시리즈) 생성"):
         gr.Markdown("시리즈 설명 → NAIS 프리셋 JSON (스트리밍). 아래 입력값은 앱을 껐다 켜도 그대로 유지됩니다.")
+        series_base_prompt = _base_prompt_editor("multi_scene", "다중 씬 생성")
         series_chars = gr.Textbox(label="캐릭터/카테고리 정의 (예: a=Alice, b=Bob)", lines=1)
         with gr.Row():
             series_fixed_reference = gr.Textbox(
@@ -271,7 +291,8 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference,
                     series_fixed_reference, series_flexible_reference, series_scene_list,
-                    series_negative_prompt, series_width, series_height, gemini_thinking],
+                    series_negative_prompt, series_width, series_height, gemini_thinking,
+                    series_base_prompt],
             outputs=[series_output, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,
@@ -301,6 +322,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         )
 
     with gr.Tab("4. AI 대화 / 편집"):
+        chat_base_prompt = _base_prompt_editor("chat", "AI 대화")
         gr.Markdown(
             "### 💬 AI 대화\n"
             "다른 탭에서 만든 결과를 베이스로 붙여넣거나 \"이 결과로 계속하기\" 버튼으로 가져와서, "
@@ -337,7 +359,8 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             chat_response = gr.Textbox(label="", lines=8, show_label=False)
 
         def _chat_send(api_key_val, base_url_val, model_val, user_msg, base_cont,
-                       notes_val, extra_prompt_val, chatbot_history, history_val, accumulate_val, thinking_val):
+                       notes_val, extra_prompt_val, chatbot_history, history_val, accumulate_val,
+                       thinking_val, base_prompt_val):
             if not user_msg or not user_msg.strip():
                 yield chatbot_history, "", history_val
                 return
@@ -349,14 +372,14 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             new_history = history_val
             for response, new_history in core.chat_with_context(
                 api_key_val, base_url_val, model_val, user_msg, base_cont,
-                notes_val, history_val, accumulate_val, extra_prompt_val, thinking_val,
+                notes_val, history_val, accumulate_val, extra_prompt_val, thinking_val, base_prompt_val,
             ):
                 display = list(new_display) + [{"role": "assistant", "content": response}]
                 yield display, response, new_history
 
         _chat_inputs = [api_key, base_url, model_select, chat_input, base_content,
                         standing_notes, extra_system_prompt, chat_display, history_state,
-                        accumulate_context, gemini_thinking]
+                        accumulate_context, gemini_thinking, chat_base_prompt]
 
         chat_send_btn.click(
             _chat_send, inputs=_chat_inputs, outputs=[chat_display, chat_response, history_state],
@@ -377,6 +400,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
                 "기존에 정리한 목록(태그/JSON 등)과 씬 이름 리스트를 주면, AI가 그 안의 명명/구조 규칙을 분석해서 "
                 "앞으로의 모든 생성 프롬프트에 계속 상주시킬 영어 지침으로 정리해줍니다."
             )
+            guideline_base_prompt = _base_prompt_editor("guideline", "지침 생성")
             with gr.Row():
                 guideline_existing_list = gr.Textbox(
                     label="기존에 정리한 목록 (태그 조합, JSON 등 붙여넣기)", lines=8, scale=1,
@@ -393,7 +417,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             guideline_btn.click(
                 core.generate_scene_guideline,
                 inputs=[api_key, guideline_existing_list, guideline_scene_names, model_select, base_url,
-                        extra_system_prompt, gemini_thinking],
+                        extra_system_prompt, gemini_thinking, guideline_base_prompt],
                 outputs=[guideline_output, guideline_status],
             )
             guideline_apply_btn.click(
