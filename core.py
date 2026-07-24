@@ -57,8 +57,9 @@ PROMPT GROUPING (MODE 2 style):
 Every generated prompt MUST be a single line where tags are grouped thematically inside curly braces { }, \
 groups separated by ", ". Use this group order:
 {quality}, {background}, {composition / camera angle}, [for each character present, one OUTER group wrapping \
-that character's two inner groups:] {{that character's appearance traits}, {that character's pose / action \
-performed by THIS character}}, {clothing}, {expression / emotional state / effects}
+that character's inner group(s):] {{that character's appearance traits [, optionally that character's own \
+emphasized composition/framing tags]}, {that character's pose / action performed by THIS character}}, \
+{clothing}, {expression / emotional state / effects}
 
 Rules:
 - Each character's appearance group and pose/action group MUST be wrapped together inside one extra pair of \
@@ -67,6 +68,11 @@ that the action belongs to THIS character and not whichever character happens to
 character's action as a bare top-level group; it must always be nested with that character's appearance group.
 - The action tags inside a character's pose/action group must describe what THAT character is doing/performing \
 (active verbs: kissing, gripping, thrusting, holding), not what is being done to them.
+- If a specific character needs their own emphasized framing/composition (distinct from the overall shot's \
+{composition} group - e.g. a close-up on just that character's face or hands while the shot as a whole is a \
+wider angle), add that as extra tags alongside that character's appearance tags in their inner appearance \
+group, not as a separate bracket - e.g. {{1girl, close-up on face}, {lying on back, kissing him back}}. Only \
+do this when a per-character framing emphasis is actually needed; most scenes don't need it.
 - If male and female characters are both present, output the male's nested group first, then the female's, \
 matching the example order: {{male appearance}, {male action}}, {{female appearance}, {female action}}.
 - Quality tags first, then background, then composition/camera angle.
@@ -74,7 +80,7 @@ matching the example order: {{male appearance}, {male action}}, {{female appeara
 - All tags inside groups must be in English, danbooru-style, comma separated within each group.
 EXAMPLE: {masterpiece, best quality, highres}, {dark background}, {full body shot, from side}, \
 {{1boy, dark-skinned male, bald, faceless}, {kissing her, gripping her hips}}, \
-{{1girl, long hair, black pubic hair}, {lying on back, legs spread, kissing him back}}, \
+{{1girl, long hair, black pubic hair, close-up on face}, {lying on back, legs spread, kissing him back}}, \
 {nude}, {blushing, trembling, biting lip, shame}"""
 
 
