@@ -32,12 +32,16 @@ def prepare_json_download(json_text):
         f.write(json_text)
     return gr.update(value=path, visible=True)
 
+DEFAULT_NEGATIVE_PROMPT = "worst quality, low quality, bad anatomy, deformed"
+DEFAULT_SCENE_WIDTH = 1216
+DEFAULT_SCENE_HEIGHT = 832
+
 EXAMPLE_PRESET = {
-    "name": "<series name in Korean>",
+    "version": 1,
     "scenes": [
         {
             "name": "<short scene code, e.g. m_s_1>",
-            "scenePrompt": "<grouped danbooru tags in English, see ASSET_GROUPING_RULES>",
+            "prompt": "<grouped danbooru tags in English, see ASSET_GROUPING_RULES>",
         }
     ],
 }
@@ -283,22 +287,43 @@ def save_notes(notes):
     return notes
 
 
+SERIES_DRAFT_FIELDS = ["chars", "fixed_reference", "flexible_reference", "description", "scene_list", "negative_prompt"]
+
+
+def save_series_draft_field(value, field):
+    """Persists one field of the '다중 씬 생성' tab (description, chars, references, scene list,
+    negative prompt) so it survives closing/restarting the app, same as the settings accordion."""
+    cfg = local_config.load_config()
+    draft = cfg.get("series_draft", {})
+    draft[field] = value or ""
+    local_config.save_config(series_draft=draft)
+    return value
+
+
+def load_series_draft():
+    cfg = local_config.load_config()
+    draft = cfg.get("series_draft", {})
+    values = [draft.get(f, "") for f in SERIES_DRAFT_FIELDS]
+    if not values[-1]:  # negative_prompt: fall back to the default only if never saved
+        values[-1] = DEFAULT_NEGATIVE_PROMPT
+    return tuple(values)
+
+
 # ---------------------------------------------------------------------------
 # JSON preset merge
 # ---------------------------------------------------------------------------
 
-def merge_json_presets(files, merged_name=None):
+def merge_json_presets(files):
     """Merge multiple uploaded NAIS preset JSON files into a single preset.
 
     Each input file is expected to follow the schema:
-    {id, name, scenes: [{id, name, scenePrompt, queueCount, images, createdAt, width, height}], createdAt}
+    {version, scenes: [{name, prompt, negativePrompt, width, height}]}
     """
     if not files:
         return "", "병합할 JSON 파일을 업로드해주세요."
 
     merged_scenes = []
     seen_names = {}
-    source_names = []
     errors = []
 
     for f in files:
@@ -314,8 +339,6 @@ def merge_json_presets(files, merged_name=None):
             errors.append(f"{os.path.basename(path)}: 'scenes' 배열이 없는 형식입니다.")
             continue
 
-        source_names.append(data.get("name", os.path.basename(path)))
-
         for scene in data["scenes"]:
             scene = dict(scene)
             base_name = scene.get("name", "scene")
@@ -326,8 +349,6 @@ def merge_json_presets(files, merged_name=None):
             seen_names[base_name] = count + 1
 
             scene["name"] = name
-            scene["id"] = str(int(time.time() * 1000)) + f"{len(merged_scenes):04d}"
-            scene["createdAt"] = int(scene["id"])
             merged_scenes.append(scene)
 
     if not merged_scenes:
@@ -336,13 +357,9 @@ def merge_json_presets(files, merged_name=None):
             status += " " + " / ".join(errors)
         return "", status
 
-    now_ms = int(time.time() * 1000)
-    name = merged_name.strip() if merged_name and merged_name.strip() else " + ".join(source_names)
     merged = {
-        "id": str(now_ms),
-        "name": name,
+        "version": 1,
         "scenes": merged_scenes,
-        "createdAt": now_ms,
     }
 
     status = f"{len(files)}개 파일에서 씬 {len(merged_scenes)}개를 통합했습니다."
@@ -558,41 +575,35 @@ def _generate_tag_combo_inner(api_key, user_request, db, variant_count, standing
 # Tab 3: series description -> NAIS preset JSON (multi-scene)
 # ---------------------------------------------------------------------------
 
-def _assemble_preset(parsed):
-    """Fill in the bookkeeping fields (ids, timestamps, queueCount, images, width, height) that the LLM
-    no longer needs to generate - only "name" and "scenePrompt" per scene come from the model."""
-    now_ms = int(time.time() * 1000)
+def _assemble_preset(parsed, negative_prompt="", width=None, height=None):
+    """Fills in width/height/negativePrompt (a single shared value applied to every scene, rather
+    than trusting the LLM to repeat it identically scene after scene) - only "name" and "prompt"
+    per scene come from the model."""
+    negative_prompt = negative_prompt if negative_prompt and negative_prompt.strip() else DEFAULT_NEGATIVE_PROMPT
     scenes = []
-    for i, scene in enumerate(parsed["scenes"]):
-        scene_id = now_ms + i
+    for scene in parsed["scenes"]:
         scenes.append({
-            "id": str(scene_id),
             "name": scene["name"],
-            "scenePrompt": scene["scenePrompt"],
-            "queueCount": 0,
-            "images": [],
-            "createdAt": scene_id,
-            "width": 1216,
-            "height": 832,
+            "prompt": scene["prompt"],
+            "negativePrompt": negative_prompt,
+            "width": width or DEFAULT_SCENE_WIDTH,
+            "height": height or DEFAULT_SCENE_HEIGHT,
         })
     return {
-        "id": str(now_ms),
-        "name": parsed["name"],
+        "version": 1,
         "scenes": scenes,
-        "createdAt": now_ms,
     }
 
 
 MULTI_SCENE_SYSTEM_PROMPT = """You are an assistant that writes prompt presets for the NAIS image generation tool.
 Given a description of a series of scenes (in Korean), output a single JSON object with EXACTLY this structure \
-(only the creative content - ids, timestamps, and other bookkeeping fields are added later by code, not by you):
+(only the creative content - version, width, height, and negativePrompt are added later by code, not by you):
 
 {
-  "name": "<series name, in Korean>",
   "scenes": [
     {
       "name": "<short scene code following the NAMING RULE below, e.g. m_s_1>",
-      "scenePrompt": "<grouped danbooru tags in English, see PROMPT GROUPING RULES below>"
+      "prompt": "<grouped danbooru tags in English, see PROMPT GROUPING RULES below>"
     }
   ]
 }
@@ -600,7 +611,7 @@ Given a description of a series of scenes (in Korean), output a single JSON obje
 """ + ASSET_GROUPING_RULES + """
 
 Additional rules:
-- "scenePrompt" must follow the PROMPT GROUPING RULES above (curly-brace groups, English danbooru tags).
+- "prompt" must follow the PROMPT GROUPING RULES above (curly-brace groups, English danbooru tags).
 - You will be given a list of candidate tags retrieved from a tag database. Prefer these tags when they fit, \
 since they are confirmed to exist in the database. You may still add common, well-known danbooru/NovelAI \
 tags (quality, composition, etc.) that are not in the candidate list.
@@ -612,8 +623,8 @@ NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
 of that series (the user may be asking to add, change, or extend scenes).
 - If an EXPLICIT SCENE LIST is given (lines of "scene name : description"), it OVERRIDES free-form scene \
 planning: output exactly one scene per listed line, using that exact name and that description as the basis \
-for that scene's scenePrompt. Do not invent extra scenes, skip any, or rename them.
-- If FIXED REFERENCE TAGS are given: include those EXACT tags, unchanged, in every single scene's "scenePrompt" \
+for that scene's prompt. Do not invent extra scenes, skip any, or rename them.
+- If FIXED REFERENCE TAGS are given: include those EXACT tags, unchanged, in every single scene's "prompt" \
 (same wording, same grouping placement every time - e.g. character identity/appearance tags that must never drift \
 across scenes in the series).
 - If CHANGEABLE REFERENCE TAGS are given: treat those as a starting pool you may freely vary, drop, replace, or \
@@ -644,7 +655,8 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
                           embedding_base_url: str = None, embedding_model: str = None,
                           embedding_api_key: str = None, use_db_reference: bool = True,
                           fixed_reference: str = "", flexible_reference: str = "",
-                          scene_list: str = ""):
+                          scene_list: str = "", negative_prompt: str = "",
+                          scene_width: int = None, scene_height: int = None):
     history = history or []
     has_description = bool(description and description.strip())
     has_scene_list = bool(scene_list and scene_list.strip())
@@ -653,13 +665,13 @@ def generate_multi_scene(api_key, description, char_def, db: TagDB,
         return
 
     try:
-        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference, scene_list):
+        for item in _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt, embedding_base_url, embedding_model, embedding_api_key, use_db_reference, fixed_reference, flexible_reference, scene_list, negative_prompt, scene_width, scene_height):
             yield item
     except Exception as e:
         yield "", f"오류 발생: {e}", "", history
 
 
-def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference="", scene_list=""):
+def _generate_multi_scene_inner(api_key, description, char_def, db, standing_notes, history, accumulate, model, base_url, extra_system_prompt="", embedding_base_url=None, embedding_model=None, embedding_api_key=None, use_db_reference=True, fixed_reference="", flexible_reference="", scene_list="", negative_prompt="", scene_width=None, scene_height=None):
     candidates_text = (
         "(DB 참조 비활성화됨 - 컨텍스트의 이전 태그를 참고하세요)" if not use_db_reference
         else "(태그 DB가 업로드되지 않았습니다)"
@@ -704,7 +716,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     )
     if fixed_reference and fixed_reference.strip():
         user_content += (
-            f"FIXED REFERENCE TAGS (must appear unchanged, verbatim, in EVERY scene's scenePrompt):\n"
+            f"FIXED REFERENCE TAGS (must appear unchanged, verbatim, in EVERY scene's prompt):\n"
             f"{fixed_reference.strip()}\n\n"
         )
     if flexible_reference and flexible_reference.strip():
@@ -770,7 +782,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
 
     try:
         parsed = json.loads(json_part)
-        parsed = _assemble_preset(parsed)
+        parsed = _assemble_preset(parsed, negative_prompt, scene_width, scene_height)
         pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
     except (json.JSONDecodeError, KeyError, TypeError):
         debug_info = "검색된 후보 태그([유사도]):\n" + candidates_debug_text + "\n\n--- AI 원본 응답 (JSON) ---\n" + raw
@@ -784,7 +796,7 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
     if use_db_reference:
         unknown = sorted({
             t for scene in parsed.get("scenes", [])
-            for t in _unknown_tags(scene.get("scenePrompt", ""), db)
+            for t in _unknown_tags(scene.get("prompt", ""), db)
         })
         if unknown:
             debug_info += f"\n\n⚠️ DB에 없는 태그 ({len(unknown)}개, LLM이 추가했을 수 있음): {', '.join(unknown)}"

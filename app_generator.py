@@ -223,7 +223,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
         )
 
     with gr.Tab("3. 다중 씬(시리즈) 생성"):
-        gr.Markdown("시리즈 설명 → NAIS 프리셋 JSON (스트리밍)")
+        gr.Markdown("시리즈 설명 → NAIS 프리셋 JSON (스트리밍). 아래 입력값은 앱을 껐다 켜도 그대로 유지됩니다.")
         series_chars = gr.Textbox(label="캐릭터/카테고리 정의 (예: a=Alice, b=Bob)", lines=1)
         with gr.Row():
             series_fixed_reference = gr.Textbox(
@@ -242,6 +242,14 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             placeholder="m_com_1 : 공원에서 산책하며 웃는 모습\nm_com_2 : 벤치에 앉아 고민하는 모습",
             lines=6,
         )
+        with gr.Row():
+            series_negative_prompt = gr.Textbox(
+                label="네거티브 프롬프트 (모든 씬에 공통 적용)",
+                value=core.DEFAULT_NEGATIVE_PROMPT,
+                lines=2, scale=3,
+            )
+            series_width = gr.Number(label="가로(width)", value=core.DEFAULT_SCENE_WIDTH, precision=0, scale=1)
+            series_height = gr.Number(label="세로(height)", value=core.DEFAULT_SCENE_HEIGHT, precision=0, scale=1)
         series_btn = gr.Button("시리즈 JSON 생성", variant="primary")
         series_status = gr.Markdown("")
         series_output = gr.Code(label="결과 JSON (NAI 프리셋에 붙여넣기)", language="json", lines=25)
@@ -255,12 +263,34 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
             inputs=[api_key, series_description, series_chars, db_state, standing_notes,
                     history_state, accumulate_context, model_select, base_url, extra_system_prompt,
                     embedding_base_url, embedding_model_select, embedding_api_key, use_db_reference,
-                    series_fixed_reference, series_flexible_reference, series_scene_list],
+                    series_fixed_reference, series_flexible_reference, series_scene_list,
+                    series_negative_prompt, series_width, series_height],
             outputs=[series_output, series_status, series_debug, history_state],
         ).then(
             core.prepare_json_download,
             inputs=[series_output],
             outputs=[series_download],
+        )
+
+        _series_draft_fields = {
+            "chars": series_chars,
+            "fixed_reference": series_fixed_reference,
+            "flexible_reference": series_flexible_reference,
+            "description": series_description,
+            "scene_list": series_scene_list,
+            "negative_prompt": series_negative_prompt,
+        }
+        for _field_name, _component in _series_draft_fields.items():
+            _component.change(
+                (lambda v, f=_field_name: core.save_series_draft_field(v, f)),
+                inputs=_component,
+            )
+
+        demo.load(
+            core.load_series_draft,
+            inputs=None,
+            outputs=[series_chars, series_fixed_reference, series_flexible_reference,
+                     series_description, series_scene_list, series_negative_prompt],
         )
 
     with gr.Tab("4. AI 대화 / 편집"):
@@ -356,7 +386,6 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
     with gr.Tab("5. JSON 통합"):
         gr.Markdown("NAIS 프리셋 JSON 여러 개를 업로드하면 씬들을 하나의 프리셋으로 합쳐줍니다. (AI 호출 없음)")
         merge_files = gr.File(label="통합할 JSON 파일들", file_count="multiple", file_types=[".json"])
-        merge_name = gr.Textbox(label="통합 결과 이름 (선택, 비우면 자동 생성)")
         merge_btn = gr.Button("통합", variant="primary")
         merge_status = gr.Markdown("")
         merge_output = gr.Code(label="통합된 JSON", language="json", lines=25)
@@ -364,7 +393,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
 
         merge_btn.click(
             core.merge_json_presets,
-            inputs=[merge_files, merge_name],
+            inputs=[merge_files],
             outputs=[merge_output, merge_status],
         ).then(
             core.prepare_json_download,
