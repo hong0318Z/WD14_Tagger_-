@@ -320,7 +320,7 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
                     with gr.Row():
                         clear_base_btn = gr.Button("베이스 비우기", size="sm")
             with gr.Column(scale=2):
-                chat_display = gr.Chatbot(label="대화", height=420, show_copy_button=True, avatar_images=(None, None))
+                chat_display = gr.Chatbot(label="대화", height=420)
                 with gr.Row():
                     quick_variation_btn = gr.Button("🔀 바리에이션 3개", size="sm")
                     quick_edit_btn = gr.Button("✏️ 특정 부분만 수정...", size="sm")

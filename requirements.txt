@@ -1,4 +1,4 @@
-gradio
+gradio>=5.0
 onnxruntime
 huggingface_hub
 pandas
