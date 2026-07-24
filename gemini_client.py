@@ -161,6 +161,27 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
     return resp.text, _usage_dict(resp.usage_metadata, elapsed)
 
 
+def _stream_with_thinking_fallback(client, model, contents, config):
+    """generate_content_stream() is a lazy generator - calling it makes no request at all;
+    the actual API call (and any error, e.g. a model that rejects thinking_budget=0) only
+    happens once you start iterating. So the "retry without forcing thinking_config" fallback
+    has to wrap the FIRST iteration specifically, not the call that creates the generator."""
+    stream = client.models.generate_content_stream(model=model, contents=contents, config=config)
+    try:
+        first_chunk = next(stream)
+    except StopIteration:
+        return
+    except Exception as e:
+        if "thinking" not in str(e).lower():
+            raise
+        config.thinking_config = None
+        stream = client.models.generate_content_stream(model=model, contents=contents, config=config)
+        yield from stream
+        return
+    yield first_chunk
+    yield from stream
+
+
 def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
                 model: str = None, base_url: str = None, response_format=None,
                 thinking_enabled: bool = False):
@@ -177,15 +198,7 @@ def chat_stream(api_key: str, messages: list, temperature: float = 0.7,
     full = ""
     finish_reason = None
     usage_metadata = None
-    try:
-        stream_ctx = client.models.generate_content_stream(model=model, contents=contents, config=config)
-    except Exception as e:
-        if "thinking" not in str(e).lower():
-            raise
-        config.thinking_config = None
-        stream_ctx = client.models.generate_content_stream(model=model, contents=contents, config=config)
-
-    for chunk in stream_ctx:
+    for chunk in _stream_with_thinking_fallback(client, model, contents, config):
         if getattr(chunk, "usage_metadata", None):
             usage_metadata = chunk.usage_metadata
         delta = chunk.text or ""
