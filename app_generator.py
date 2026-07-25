@@ -457,5 +457,9 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("GRADIO_SERVER_PORT", 7861))
+    # 7861 sits inside a Windows dynamic-port-exclusion range on some machines (WSL2/Hyper-V
+    # reserve chunks of the ephemeral range) - the OS refuses the bind even with nothing
+    # else listening on it, so netstat shows nothing yet the port is still unusable. 8861 is
+    # comfortably outside the ranges that tend to get excluded.
+    port = int(os.environ.get("GRADIO_SERVER_PORT", 8861))
     demo.launch(server_port=port)
