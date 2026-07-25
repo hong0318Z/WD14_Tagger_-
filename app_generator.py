@@ -457,4 +457,5 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(server_port=7861)
+    port = int(os.environ.get("GRADIO_SERVER_PORT", 7861))
+    demo.launch(server_port=port)
