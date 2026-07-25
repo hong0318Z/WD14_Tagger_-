@@ -120,6 +120,12 @@ def _thinking_config(enabled: bool):
     return types.ThinkingConfig(thinking_budget=-1 if enabled else 0)
 
 
+# Models that rejected thinking_budget=0 with "this model only works in thinking mode" -
+# remembered per process so later calls to the same model skip straight to thinking-on
+# instead of paying for a failed request + retry every single time.
+_THINKING_REQUIRED_MODELS = set()
+
+
 # This app's whole purpose is generating explicit adult-content danbooru tag prompts, so
 # Gemini's default safety thresholds (which block sexual-content responses outright) have
 # to be relaxed, or every multi-scene/NSFW-tag generation call comes back empty with no
@@ -137,6 +143,8 @@ _SAFETY_SETTINGS = [
 
 def _build_config(system_text, temperature, model, api_key, client, response_format, thinking_enabled=False):
     cache_name = _get_or_create_cache(client, model, api_key, system_text)
+    if model in _THINKING_REQUIRED_MODELS:
+        thinking_enabled = True
     config_kwargs = dict(
         temperature=temperature,
         max_output_tokens=MAX_OUTPUT_TOKENS,
@@ -179,11 +187,14 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
     try:
         resp = client.models.generate_content(model=model, contents=contents, config=config)
     except Exception as e:
-        # some models don't support thinking_budget=0 (thinking can't be fully disabled) -
-        # retry once without forcing a thinking_config rather than hard-failing the request.
+        # some models (e.g. reasoning-only previews) reject thinking_budget=0 outright and
+        # REQUIRE thinking - omitting thinking_config entirely still resolves to a disabled/
+        # zero budget for these, so the only working fallback is to force it on (dynamic
+        # budget), not just remove the override.
         if "thinking" not in str(e).lower():
             raise
-        config.thinking_config = None
+        _THINKING_REQUIRED_MODELS.add(model)
+        config.thinking_config = _thinking_config(True)
         resp = client.models.generate_content(model=model, contents=contents, config=config)
     elapsed = time.time() - started
     _log_usage(f"done: elapsed={elapsed:.1f}s", resp.usage_metadata)
@@ -195,8 +206,8 @@ def chat(api_key: str, messages: list, temperature: float = 0.7,
 def _stream_with_thinking_fallback(client, model, contents, config):
     """generate_content_stream() is a lazy generator - calling it makes no request at all;
     the actual API call (and any error, e.g. a model that rejects thinking_budget=0) only
-    happens once you start iterating. So the "retry without forcing thinking_config" fallback
-    has to wrap the FIRST iteration specifically, not the call that creates the generator."""
+    happens once you start iterating. So the "force thinking on" fallback has to wrap the
+    FIRST iteration specifically, not the call that creates the generator."""
     stream = client.models.generate_content_stream(model=model, contents=contents, config=config)
     try:
         first_chunk = next(stream)
@@ -205,7 +216,12 @@ def _stream_with_thinking_fallback(client, model, contents, config):
     except Exception as e:
         if "thinking" not in str(e).lower():
             raise
-        config.thinking_config = None
+        # some models (e.g. reasoning-only previews) reject thinking_budget=0 outright and
+        # REQUIRE thinking - omitting thinking_config entirely still resolves to a disabled/
+        # zero budget for these, so the only working fallback is to force it on (dynamic
+        # budget), not just remove the override.
+        _THINKING_REQUIRED_MODELS.add(model)
+        config.thinking_config = _thinking_config(True)
         stream = client.models.generate_content_stream(model=model, contents=contents, config=config)
         yield from stream
         return
