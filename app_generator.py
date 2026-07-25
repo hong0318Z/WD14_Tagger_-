@@ -457,9 +457,20 @@ with gr.Blocks(title="NAI Prompt Generator") as demo:
 
 
 if __name__ == "__main__":
-    # 7861 sits inside a Windows dynamic-port-exclusion range on some machines (WSL2/Hyper-V
-    # reserve chunks of the ephemeral range) - the OS refuses the bind even with nothing
-    # else listening on it, so netstat shows nothing yet the port is still unusable. 8861 is
-    # comfortably outside the ranges that tend to get excluded.
-    port = int(os.environ.get("GRADIO_SERVER_PORT", 8861))
-    demo.launch(server_port=port)
+    # Windows periodically reserves chunks of the port range for WSL2/Hyper-V (visible via
+    # `netsh interface ipv4 show excludedportrange`), and which chunk gets reserved changes
+    # across reboots - a port that worked yesterday can be silently unbindable today even
+    # with nothing else listening on it. Rather than hardcode one port and tell the user to
+    # go dig through netsh output again, just try a spread of ports and launch on whichever
+    # one actually binds - Gradio prints the real URL/port it started on either way.
+    start_port = int(os.environ.get("GRADIO_SERVER_PORT", 8861))
+    candidate_ports = [start_port] + [start_port + i for i in range(1, 30)]
+
+    for i, port in enumerate(candidate_ports):
+        try:
+            demo.launch(server_port=port)
+            break
+        except OSError:
+            if i == len(candidate_ports) - 1:
+                raise
+            print(f"[app_generator] 포트 {port} 사용 불가 (Windows 예약 범위일 수 있음) - 다음 포트 시도...")
