@@ -32,7 +32,7 @@ def prepare_json_download(json_text):
         f.write(json_text)
     return gr.update(value=path, visible=True)
 
-DEFAULT_NEGATIVE_PROMPT = "worst quality, low quality, bad anatomy, deformed"
+DEFAULT_NEGATIVE_PROMPT = "worst quality, low quality"
 DEFAULT_SCENE_WIDTH = 1216
 DEFAULT_SCENE_HEIGHT = 832
 
@@ -46,42 +46,46 @@ EXAMPLE_PRESET = {
     ],
 }
 
-ASSET_GROUPING_RULES = """[IMAGE ASSET SYSTEM - PROMPT GROUPING RULES]
+ASSET_GROUPING_RULES = """[IMAGE ASSET SYSTEM - NAMING & PROMPT GROUPING RULES]
 
-NAMING RULE for scene/file codes: [char]_[category]_[number]
-NUMBER MEANING: 1-3=resistance/daily, 4-6=acceptance, 7-9=indulgence, 10+=full corruption
-CATEGORIES: loc=location sex=intercourse orl=oral fpl=foreplay emo=expression com=daily grp=group (expand as needed)
+NAMING RULE (action/situation-driven, character and state kept separable for reuse):
+- Base asset name: [action_or_situation_category]_[background]
+  e.g. sword_slash_attack_arena, arguing_heated_corridor
+- The character code and the state/emotion suffix are NOT baked into the base asset name - they get \
+assembled onto it only at call time, as a "[char]_" prefix and a "_[state]" suffix:
+  Final call form: [char]_[action_or_situation_category]_[background]_[state]
+  e.g. arthur_sword_slash_attack_arena_critical_hit
+- Generic state/stage-progression suffixes (apply flexibly per situation, not every asset needs all of them): \
+_neutral (default/idle) -> _alert (on guard) -> _engaged (in progress) -> _struggling (having a hard time) -> \
+_overcome (overcame it) or _defeated (defeated/broken).
 CHARS: defined per project by the user (e.g. a=Alice, b=Bob)
 
-PROMPT GROUPING (MODE 2 style):
+PROMPT GROUPING:
 Every generated prompt MUST be a single line where tags are grouped thematically inside curly braces { }, \
 groups separated by ", ". Use this group order:
-{quality}, {background}, {composition / camera angle}, [for each character present, one OUTER group wrapping \
-that character's inner group(s):] {{that character's appearance traits [, optionally that character's own \
-emphasized composition/framing tags]}, {that character's pose / action performed by THIS character}}, \
-{clothing}, {expression / emotional state / effects}
+{quality}, {background / map gimmick}, {composition / viewpoint}, [for each character present, one OUTER \
+group wrapping that character's inner group(s):] {{that character's appearance traits}, {that character's \
+state/physical reaction}, {that character's emotion/expression/action}}, {{a secondary character or mob's \
+appearance}, {their state/action}}
 
 Rules:
-- Each character's appearance group and pose/action group MUST be wrapped together inside one extra pair of \
-curly braces - e.g. {{1boy, dark-skinned male, bald}, {kissing her, gripping her hips}} - so it's unambiguous \
-that the action belongs to THIS character and not whichever character happens to be adjacent. Never output a \
-character's action as a bare top-level group; it must always be nested with that character's appearance group.
-- The action tags inside a character's pose/action group must describe what THAT character is doing/performing \
-(active verbs: kissing, gripping, thrusting, holding), not what is being done to them.
-- If a specific character needs their own emphasized framing/composition (distinct from the overall shot's \
-{composition} group - e.g. a close-up on just that character's face or hands while the shot as a whole is a \
-wider angle), add that as extra tags alongside that character's appearance tags in their inner appearance \
-group, not as a separate bracket - e.g. {{1girl, close-up on face}, {lying on back, kissing him back}}. Only \
-do this when a per-character framing emphasis is actually needed; most scenes don't need it.
-- If male and female characters are both present, output the male's nested group first, then the female's, \
-matching the example order: {{male appearance}, {male action}}, {{female appearance}, {female action}}.
-- Quality tags first, then background, then composition/camera angle.
-- Expression / emotional state / effect tags (blush, sweat, tears, trembling, etc.) always go in the LAST group.
+- Each character's tags MUST be wrapped together inside one outer pair of curly braces - e.g. \
+{{1boy, dark-skinned male, bald}, {panting, sweating}, {gripping her hips, smirking}} - so it's unambiguous \
+which character each inner group belongs to. Never output a character's state or action as a bare top-level \
+group; it must always be nested inside that character's own outer group.
+- The primary/focal character (the one the scene centers on, e.g. the POV target or protagonist) gets THREE \
+inner groups: {appearance}, {state/physical reaction}, {emotion/expression/action}.
+- A secondary character or mob only needs TWO inner groups: {appearance}, {state/action}.
+- The state/physical-reaction tags MUST match whatever state suffix that scene is using - e.g. _struggling -> \
+panting, sweating, gritted teeth, disheveled; _defeated/_overcome -> collapsed, bruises, scratches, dirt, \
+exhausted expression; _alert -> tense posture, sharp eyes. Use universal physical/emotional reactions \
+(panting, sweating, scratches, dirt, trembling, etc.) appropriate to that state.
+- If male and female characters are both present, output the male's nested group first, then the female's.
+- Quality tags first, then background/map gimmick, then composition/viewpoint.
 - All tags inside groups must be in English, danbooru-style, comma separated within each group.
-EXAMPLE: {masterpiece, best quality, highres}, {dark background}, {full body shot, from side}, \
-{{1boy, dark-skinned male, bald, faceless}, {kissing her, gripping her hips}}, \
-{{1girl, long hair, black pubic hair, close-up on face}, {lying on back, legs spread, kissing him back}}, \
-{nude}, {blushing, trembling, biting lip, shame}"""
+EXAMPLE: {masterpiece, best quality, highres}, {dark arena, cracked pillars}, {full body shot, dynamic angle}, \
+{{1boy, dark-skinned male, bald, faceless}, {panting, sweating, scratches}, {gripping sword, snarling, gritted teeth}}, \
+{{1girl, long hair, black pubic hair}, {disheveled, bruised}, {collapsed, exhausted expression}}"""
 
 
 def _tag_db_status_text(db):
@@ -643,9 +647,9 @@ Additional rules:
 - You will be given a list of candidate tags retrieved from a tag database. Prefer these tags when they fit, \
 since they are confirmed to exist in the database. You may still add common, well-known danbooru/NovelAI \
 tags (quality, composition, etc.) that are not in the candidate list.
-- Scene "name" codes must follow the NAMING RULE ([char]_[category]_[number]) using the CHARS/CATEGORIES \
-the user provides (or sensible defaults if none given), and the number should reflect the \
-NUMBER MEANING (1-3/4-6/7-9/10+) for that scene's intensity.
+- Scene "name" codes must follow the NAMING RULE above: [char]_[action_or_situation_category]_[background]_[state], \
+using the CHARS the user provides (or a sensible default if none given), and the state suffix should reflect \
+that scene's point along _neutral -> _alert -> _engaged -> _struggling -> _overcome/_defeated.
 - Generate as many scenes as make sense for the user's description (each meaningful step/pose should be its own scene).
 - If the conversation history contains an earlier series JSON, treat the new request as a revision/follow-up \
 of that series (the user may be asking to add, change, or extend scenes).
@@ -839,40 +843,47 @@ def _generate_multi_scene_inner(api_key, description, char_def, db, standing_not
 
 ASSET_SYSTEM_PROMPT = """[IMAGE ASSET SYSTEM]
 
-NAMING RULE: [char]_[category]_[number]
-NUMBER MEANING: 1-3=resistance/daily 4-6=acceptance 7-9=indulgence 10+=full corruption
-
-CHARS: defined per project by the user (e.g. a=Alice b=Bob)
-CATEGORIES: loc=location sex=intercourse orl=oral fpl=foreplay emo=expression com=daily grp=group (expand as needed)
-
+""" + ASSET_GROUPING_RULES + """
 ---
 
-MODE 1 - FILENAME DEFINITION
+MODE 1 - FILENAME DEFINITION (Phase 1: Naming)
 TRIGGER: "define filename" / "create series"
 OUTPUT FORMAT:
 SERIES: [series_name]
-[char]_[cat]_[number]: [keywords only, comma separated]
-RULES: no sentences, keywords only, follow number meaning
+BASE: [action_or_situation_category]_[background]: [keywords only, comma separated, describing this base asset]
+CALL FORM: [char]_[action_or_situation_category]_[background]_[state]
+STATES USED: list which of _neutral/_alert/_engaged/_struggling/_overcome/_defeated apply to this asset
+RULES: no sentences, keywords only, base name stays character/state-free per the NAMING RULE above
 
 ---
 
-MODE 2 - PROMPT GENERATION
+MODE 2 - PROMPT GENERATION (Phase 1: Drafting)
 TRIGGER: "generate prompt" / "NAI prompt"
-OUTPUT FORMAT (single line, groups in {}, comma separated tags inside):
-{quality}, {background}, {male if present}, {female + physical features}, {clothing}, {act/position}, {expression/emotional state}
-RULES: English tags only, each thematic group wrapped in {}, written as ONE single line, character-specific fixed traits always included in their {}, emotions concentrated in last {}
-EXAMPLE: {masterpiece, best quality, highres}, {dark background}, {1dark-skinned male, bald, faceless}, {1girl, black pubic hair, sweat}, {full nelson, standing sex}, {blushing, trembling, biting lip, shame}
+OUTPUT FORMAT: single line, grouped exactly per the PROMPT GROUPING rules above \
+({quality}, {background/map gimmick}, {composition/viewpoint}, then one nested outer group per character - \
+3 inner groups for the focal character, 2 for a secondary/mob character).
+RULES: English tags only, each thematic group wrapped in {}, written as ONE single line, state/physical-reaction \
+tags must match the scene's state suffix (see NAMING RULE above), negative prompt defaults to \
+"worst quality, low quality" unless the user specifies otherwise.
 
 ---
 
-MODE 3 - ASSET GUIDE WRITE
+MODE 3 - SCENE GUIDE WRITE (Phase 2: Finalizing)
 TRIGGER: "write asset guide" / "create guide"
+PURPOSE: once the user has finalized a batch of scene/JSON drafts, write a reference description so an LLM \
+calling these assets later can match context to the correct [char]_[scene]_[state] call without re-reading \
+the raw prompts.
 OUTPUT FORMAT:
-[SERIES NAME]
-FORMAT: [char]_[cat]_[number]
-1-3:[summary] 4-6:[summary] 7-9:[summary] 10+:[summary]
-ENTRIES: _1:[keywords] _2:[keywords] _3:[keywords] ...
-RULES: no USAGE GUIDELINES section, no sentences, keywords and numbers only
+Category: [general-purpose category name, e.g. sword_slash_attack]
+Common Condition: [situation shared by every scene in this batch, e.g. 3rd-person POV, action scene]
+[[char]_[scene_name]_[state]] : (short situation/emotion summary)
+[[char]_[scene_name]_[state]] : (short situation/emotion summary)
+...
+Description: [detailed explanation of the specific situation this general-purpose asset should be called for, \
+once it has a character code and state suffix attached - written so an LLM can easily read it and match it to \
+context text]
+RULES: no extra sections beyond the ones above, keep each scene's summary line short, put all situational \
+nuance in the final Description block.
 
 ---
 
